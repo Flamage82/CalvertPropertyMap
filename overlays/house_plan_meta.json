@@ -1,0 +1,23 @@
+{
+  "width_m": 28.78,
+  "height_m": 22.84,
+  "width_mm": 28784.7,
+  "height_mm": 22836.6,
+  "units": "millimeters",
+  "source": "Staged House - Sheet - A102 - PLAN A.dxf",
+  "layers": [
+    "A-FLOR",
+    "L-SITE-WALL",
+    "A-WALL",
+    "I-WALL",
+    "A-DETL-HDLN",
+    "A-DOOR",
+    "I-FURN",
+    "Q-CASE",
+    "P-SANR-FIXT",
+    "Q-CASE-HDLN"
+  ],
+  "line_count": 1168,
+  "arc_count": 183,
+  "circle_count": 18
+}

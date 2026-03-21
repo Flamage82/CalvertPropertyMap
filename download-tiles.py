@@ -18,12 +18,14 @@ import argparse
 import urllib.request
 import urllib.error
 
-# Block bounds (with buffer around the lot)
+# Block bounds with generous buffer for viewport coverage
+# The lot itself is roughly -27.670 to -27.674, 152.492 to 152.498
+# We add ~1km buffer in each direction so the map never shows blank edges
 BOUNDS = {
-    "minLat": -27.676,
-    "maxLat": -27.667,
-    "minLng": 152.489,
-    "maxLng": 152.500,
+    "minLat": -27.685,
+    "maxLat": -27.658,
+    "minLng": 152.478,
+    "maxLng": 152.510,
 }
 
 PROVIDERS = {

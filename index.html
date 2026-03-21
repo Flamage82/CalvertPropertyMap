@@ -157,6 +157,38 @@
     display: none; pointer-events: none;
   }
 
+  /* House plan overlay controls */
+  .house-plan-controls {
+    background: rgba(20, 20, 40, 0.95); border-radius: 8px;
+    padding: 10px 14px; margin-top: 8px; display: none;
+  }
+  .house-plan-controls.visible { display: block; }
+  .house-plan-controls label {
+    display: block; font-size: 11px; color: #8888aa; margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: 0.8px;
+  }
+  .house-plan-controls .control-row {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  }
+  .house-plan-controls input[type="range"] {
+    flex: 1; accent-color: #4a9eff; height: 4px;
+  }
+  .house-plan-controls .value-display {
+    font-family: monospace; font-size: 12px; color: #ccc; min-width: 40px; text-align: right;
+  }
+  .house-plan-controls .hint {
+    font-size: 10px; color: #666; font-style: italic; margin-top: 4px;
+  }
+  .house-plan-btn-row { display: flex; gap: 6px; margin-top: 6px; }
+  .house-plan-btn-row button {
+    flex: 1; padding: 5px 8px; border-radius: 5px; font-size: 11px;
+    border: 1px solid rgba(255,255,255,0.15); cursor: pointer;
+    background: rgba(255,255,255,0.06); color: #bbb;
+  }
+  .house-plan-btn-row button:hover { background: rgba(255,255,255,0.12); color: #fff; }
+  .house-plan-btn-row button.danger { color: #ff6666; }
+  .house-plan-btn-row button.danger:hover { background: rgba(255,60,60,0.15); }
+
   /* Contour elevation labels */
   .contour-label {
     background: none !important; border: none !important; box-shadow: none !important;
@@ -935,7 +967,7 @@ const drawnItems = new L.FeatureGroup();
 map.addLayer(drawnItems);
 
 const sitePlanElements = [
-  { id: 'house', name: 'House Footprint', icon: '🏠', color: '#4a9eff', fillColor: '#4a9eff', type: 'polygon' },
+  { id: 'house', name: 'Place House Plan', icon: '🏠', color: '#4a9eff', fillColor: '#4a9eff', type: 'housePlan' },
   { id: 'garage', name: 'Garage / Shed', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'polygon' },
   { id: 'driveway', name: 'Driveway / Access', icon: '🛤️', color: '#999999', fillColor: '#888888', type: 'polygon' },
   { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'polygon' },
@@ -960,9 +992,322 @@ sitePlanElements.forEach(el => {
   btn.innerHTML = `<span class="draw-icon">${el.icon}</span> ${el.name}`;
   btn.onclick = () => startDrawing(el);
   drawToolsContainer.appendChild(btn);
+
+  // Add house plan controls panel right after the house button
+  if (el.type === 'housePlan') {
+    const controls = document.createElement('div');
+    controls.className = 'house-plan-controls';
+    controls.id = 'housePlanControls';
+    controls.innerHTML = `
+      <label>Rotation</label>
+      <div class="control-row">
+        <input type="range" id="housePlanRotation" min="0" max="360" value="0" step="1">
+        <span class="value-display" id="housePlanRotVal">0°</span>
+      </div>
+      <div class="hint">Drag the plan on the map to reposition. Use the slider to rotate.</div>
+      <div class="house-plan-btn-row">
+        <button onclick="lockHousePlan()">Lock Position</button>
+        <button class="danger" onclick="removeHousePlan()">Remove</button>
+      </div>
+    `;
+    drawToolsContainer.appendChild(controls);
+  }
 });
 
+// ============================
+// HOUSE PLAN SVG OVERLAY
+// ============================
+let housePlanOverlay = null;
+let housePlanState = {
+  placed: false,
+  locked: false,
+  center: null,    // L.LatLng
+  rotation: 0,     // degrees
+  widthM: 28.83,   // from DXF metadata
+  heightM: 41.70,
+  svgContent: null,
+  svgUrl: 'overlays/house_plan.svg'
+};
+
+// Restore saved state
+try {
+  const saved = localStorage.getItem('housePlanState');
+  if (saved) {
+    const s = JSON.parse(saved);
+    if (s.placed) {
+      housePlanState = { ...housePlanState, ...s };
+      housePlanState.center = L.latLng(s.center.lat, s.center.lng);
+    }
+  }
+} catch(e) {}
+
+function saveHousePlanState() {
+  const s = { ...housePlanState };
+  if (s.center) s.center = { lat: s.center.lat, lng: s.center.lng };
+  delete s.svgContent;
+  localStorage.setItem('housePlanState', JSON.stringify(s));
+}
+
+function metersToLatLng(meters, lat) {
+  // Convert meters to degrees at a given latitude
+  const latDeg = meters / 111320;
+  const lngDeg = meters / (111320 * Math.cos(lat * Math.PI / 180));
+  return { lat: latDeg, lng: lngDeg };
+}
+
+function getHousePlanBounds(center, rotation) {
+  // Calculate the bounding box of the rotated rectangle in lat/lng
+  const w = housePlanState.widthM;
+  const h = housePlanState.heightM;
+  const conv = metersToLatLng(1, center.lat);
+
+  // Half-dimensions in degrees
+  const hw = (w / 2) * conv.lng;
+  const hh = (h / 2) * conv.lat;
+
+  // For the image overlay bounds, we need the axis-aligned bounding box
+  // that contains the rotated rectangle
+  const rad = rotation * Math.PI / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const bw = hw * cos + hh * sin;
+  const bh = hw * sin + hh * cos;
+
+  return L.latLngBounds(
+    [center.lat - bh, center.lng - bw],
+    [center.lat + bh, center.lng + bw]
+  );
+}
+
+function createHousePlanOverlay(svgContent, center, rotation) {
+  // Create a custom SVG overlay using L.SVGOverlay (Leaflet 1.8+) or image overlay
+  const bounds = getHousePlanBounds(center, rotation);
+
+  // Build a wrapper SVG that includes rotation
+  const w = housePlanState.widthM;
+  const h = housePlanState.heightM;
+  const conv = metersToLatLng(1, center.lat);
+  const rad = rotation * Math.PI / 180;
+  const cos_r = Math.abs(Math.cos(rad));
+  const sin_r = Math.abs(Math.sin(rad));
+  const bboxW = w * cos_r + h * sin_r;  // meters
+  const bboxH = w * sin_r + h * cos_r;
+
+  // SVG viewBox in mm (the source SVG is in mm)
+  const srcWmm = housePlanState.widthM * 1000;
+  const srcHmm = housePlanState.heightM * 1000;
+  const bboxWmm = bboxW * 1000;
+  const bboxHmm = bboxH * 1000;
+
+  const wrappedSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${bboxWmm.toFixed(0)} ${bboxHmm.toFixed(0)}" preserveAspectRatio="none">
+    <g transform="translate(${bboxWmm/2}, ${bboxHmm/2}) rotate(${-rotation}) translate(${-srcWmm/2}, ${-srcHmm/2})">
+      ${svgContent}
+    </g>
+  </svg>`;
+
+  // Create SVG overlay
+  const parser = new DOMParser();
+  const svgDoc = parser.parseFromString(wrappedSvg, 'image/svg+xml');
+  const svgEl = svgDoc.documentElement;
+
+  const overlay = L.svgOverlay(svgEl, bounds, {
+    interactive: true,
+    pane: 'overlayPane',
+    className: 'house-plan-overlay'
+  });
+
+  return overlay;
+}
+
+function placeHousePlan() {
+  const center = housePlanState.center || map.getCenter();
+  housePlanState.center = center;
+  housePlanState.placed = true;
+
+  // Load SVG if not cached
+  if (!housePlanState.svgContent) {
+    fetch(housePlanState.svgUrl)
+      .then(r => r.text())
+      .then(svg => {
+        // Extract the inner content (everything inside the outer <svg> tag)
+        const match = svg.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
+        housePlanState.svgContent = match ? match[1] : svg;
+        renderHousePlan();
+      })
+      .catch(e => console.error('Failed to load house plan SVG:', e));
+  } else {
+    renderHousePlan();
+  }
+}
+
+function renderHousePlan() {
+  // Remove existing overlay
+  if (housePlanOverlay) {
+    map.removeLayer(housePlanOverlay);
+  }
+
+  housePlanOverlay = createHousePlanOverlay(
+    housePlanState.svgContent,
+    housePlanState.center,
+    housePlanState.rotation
+  );
+  housePlanOverlay.addTo(map);
+
+  // Make it draggable if not locked
+  if (!housePlanState.locked) {
+    enableHousePlanDrag();
+  }
+
+  // Show controls
+  document.getElementById('housePlanControls').classList.add('visible');
+  document.getElementById('housePlanRotation').value = housePlanState.rotation;
+  document.getElementById('housePlanRotVal').textContent = housePlanState.rotation + '°';
+
+  // Update elements list
+  updateHousePlanInList();
+  saveHousePlanState();
+}
+
+function enableHousePlanDrag() {
+  if (!housePlanOverlay) return;
+
+  const el = housePlanOverlay.getElement();
+  if (!el) return;
+
+  el.style.cursor = 'move';
+
+  let dragging = false;
+  let startLatLng = null;
+
+  function onMouseDown(e) {
+    if (housePlanState.locked) return;
+    dragging = true;
+    startLatLng = map.mouseEventToLatLng(e);
+    map.dragging.disable();
+    e.stopPropagation();
+    e.preventDefault();
+  }
+
+  function onMouseMove(e) {
+    if (!dragging) return;
+    const currentLatLng = map.mouseEventToLatLng(e);
+    const dlat = currentLatLng.lat - startLatLng.lat;
+    const dlng = currentLatLng.lng - startLatLng.lng;
+
+    housePlanState.center = L.latLng(
+      housePlanState.center.lat + dlat,
+      housePlanState.center.lng + dlng
+    );
+    startLatLng = currentLatLng;
+
+    // Update overlay bounds
+    const bounds = getHousePlanBounds(housePlanState.center, housePlanState.rotation);
+    housePlanOverlay.setBounds(bounds);
+  }
+
+  function onMouseUp(e) {
+    if (!dragging) return;
+    dragging = false;
+    map.dragging.enable();
+    saveHousePlanState();
+  }
+
+  el.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+
+  // Touch support
+  el.addEventListener('touchstart', function(e) {
+    if (housePlanState.locked) return;
+    const touch = e.touches[0];
+    onMouseDown({ clientX: touch.clientX, clientY: touch.clientY, stopPropagation: () => e.stopPropagation(), preventDefault: () => e.preventDefault() });
+  }, { passive: false });
+  document.addEventListener('touchmove', function(e) {
+    if (!dragging) return;
+    const touch = e.touches[0];
+    onMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+  });
+  document.addEventListener('touchend', function(e) { onMouseUp(e); });
+
+  // Store cleanup function
+  housePlanOverlay._dragCleanup = () => {
+    el.removeEventListener('mousedown', onMouseDown);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+}
+
+function lockHousePlan() {
+  housePlanState.locked = !housePlanState.locked;
+  const btn = document.querySelector('.house-plan-btn-row button:first-child');
+  if (btn) btn.textContent = housePlanState.locked ? 'Unlock Position' : 'Lock Position';
+
+  if (housePlanOverlay) {
+    const el = housePlanOverlay.getElement();
+    if (el) el.style.cursor = housePlanState.locked ? 'default' : 'move';
+  }
+  saveHousePlanState();
+}
+
+function removeHousePlan() {
+  if (housePlanOverlay) {
+    if (housePlanOverlay._dragCleanup) housePlanOverlay._dragCleanup();
+    map.removeLayer(housePlanOverlay);
+    housePlanOverlay = null;
+  }
+  housePlanState.placed = false;
+  housePlanState.locked = false;
+  housePlanState.center = null;
+  housePlanState.rotation = 0;
+  document.getElementById('housePlanControls').classList.remove('visible');
+  document.getElementById('housePlanRotation').value = 0;
+  document.getElementById('housePlanRotVal').textContent = '0°';
+  localStorage.removeItem('housePlanState');
+  updateElementsList();
+}
+
+function updateHousePlanInList() {
+  // Add house plan to the placed elements list
+  const existing = placedElements.find(e => e.id === 'housePlan');
+  if (!existing && housePlanState.placed) {
+    placedElements.unshift({
+      id: 'housePlan',
+      layer: housePlanOverlay,
+      type: { id: 'house', name: 'House Plan (DXF)', icon: '🏠', color: '#4a9eff' },
+      measurement: housePlanState.widthM.toFixed(1) + 'm × ' + housePlanState.heightM.toFixed(1) + 'm'
+    });
+    updateElementsList();
+  }
+}
+
+// Rotation slider handler
+document.getElementById('housePlanRotation').addEventListener('input', function(e) {
+  housePlanState.rotation = parseInt(e.target.value);
+  document.getElementById('housePlanRotVal').textContent = housePlanState.rotation + '°';
+  if (housePlanState.placed && housePlanState.svgContent) {
+    renderHousePlan();
+  }
+});
+
+// Restore house plan on page load if previously placed
+if (housePlanState.placed && housePlanState.center) {
+  placeHousePlan();
+}
+
 function startDrawing(el) {
+  // Handle house plan placement specially
+  if (el.type === 'housePlan') {
+    if (housePlanState.placed) {
+      // Already placed — toggle controls visibility
+      const ctrl = document.getElementById('housePlanControls');
+      ctrl.classList.toggle('visible');
+      return;
+    }
+    // Place the house plan at map center
+    placeHousePlan();
+    return;
+  }
+
   if (!L.Draw) { alert('Drawing tools are still loading. Please try again in a moment.'); return; }
 
   // Cancel previous
@@ -1093,6 +1438,10 @@ function updateElementsList() {
 }
 
 function removeElement(id) {
+  if (id === 'housePlan') {
+    removeHousePlan();
+    return;
+  }
   const idx = placedElements.findIndex(e => e.id === id);
   if (idx >= 0) {
     drawnItems.removeLayer(placedElements[idx].layer);
