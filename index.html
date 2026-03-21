@@ -521,6 +521,14 @@ const UrlState = {
         locked: p.get('hp_lock') === '1'
       };
     }
+    if (p.has('sp_lat') && p.has('sp_lng')) {
+      state.shedPlan = {
+        lat: parseFloat(p.get('sp_lat')),
+        lng: parseFloat(p.get('sp_lng')),
+        rotation: p.has('sp_rot') ? parseInt(p.get('sp_rot')) : 0,
+        locked: p.get('sp_lock') === '1'
+      };
+    }
     if (p.has('grid')) {
       state.grid = true;
       state.gridOpacity = p.has('grid_op') ? parseInt(p.get('grid_op')) / 100 : undefined;
@@ -561,6 +569,13 @@ const UrlState = {
       p.set('hp_lng', housePlanState.center.lng.toFixed(6));
       if (housePlanState.rotation) p.set('hp_rot', housePlanState.rotation);
       if (housePlanState.locked) p.set('hp_lock', '1');
+    }
+    // Shed plan
+    if (shedPlanState.placed && shedPlanState.center) {
+      p.set('sp_lat', shedPlanState.center.lat.toFixed(6));
+      p.set('sp_lng', shedPlanState.center.lng.toFixed(6));
+      if (shedPlanState.rotation) p.set('sp_rot', shedPlanState.rotation);
+      if (shedPlanState.locked) p.set('sp_lock', '1');
     }
     // Panel state
     const panel = document.getElementById('sidePanel');
@@ -1272,7 +1287,7 @@ map.addLayer(drawnItems);
 
 const sitePlanElements = [
   { id: 'house', name: 'Place House Plan', icon: '🏠', color: '#4a9eff', fillColor: '#4a9eff', type: 'housePlan' },
-  { id: 'garage', name: 'Garage / Shed', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'polygon' },
+  { id: 'garage', name: 'Place Shed Plan', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'shedPlan' },
   { id: 'driveway', name: 'Driveway / Access', icon: '🛤️', color: '#999999', fillColor: '#888888', type: 'polygon' },
   { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'polygon' },
   { id: 'watertank', name: 'Water Tank', icon: '💧', color: '#2299dd', fillColor: '#2299dd', type: 'circle' },
@@ -1312,6 +1327,26 @@ sitePlanElements.forEach(el => {
       <div class="house-plan-btn-row">
         <button onclick="lockHousePlan()">Lock Position</button>
         <button class="danger" onclick="removeHousePlan()">Remove</button>
+      </div>
+    `;
+    drawToolsContainer.appendChild(controls);
+  }
+
+  // Add shed plan controls panel right after the shed button
+  if (el.type === 'shedPlan') {
+    const controls = document.createElement('div');
+    controls.className = 'house-plan-controls';
+    controls.id = 'shedPlanControls';
+    controls.innerHTML = `
+      <label>Rotation</label>
+      <div class="control-row">
+        <input type="range" id="shedPlanRotation" min="0" max="360" value="0" step="1">
+        <span class="value-display" id="shedPlanRotVal">0°</span>
+      </div>
+      <div class="hint">Drag the shed on the map to reposition. Use the slider to rotate.</div>
+      <div class="house-plan-btn-row">
+        <button onclick="lockShedPlan()">Lock Position</button>
+        <button class="danger" onclick="removeShedPlan()">Remove</button>
       </div>
     `;
     drawToolsContainer.appendChild(controls);
@@ -1367,23 +1402,23 @@ function metersToLatLng(meters, lat) {
   return { lat: latDeg, lng: lngDeg };
 }
 
-function getHousePlanBounds(center, rotation) {
-  // Calculate the bounding box of the rotated rectangle in lat/lng
-  const w = housePlanState.widthM;
-  const h = housePlanState.heightM;
+// Shared: compute rotated bounding box for a plan overlay.
+// KEY FIX: expansion is computed in METERS first, then converted to degrees.
+// The old code mixed lat-degrees with lng-degrees during the sin/cos expansion,
+// which caused skew because 1° lat ≠ 1° lng in physical distance.
+function getPlanBounds(center, widthM, heightM, rotation) {
   const conv = metersToLatLng(1, center.lat);
+  const rad = (rotation || 0) * Math.PI / 180;
+  const cosR = Math.abs(Math.cos(rad));
+  const sinR = Math.abs(Math.sin(rad));
 
-  // Half-dimensions in degrees
-  const hw = (w / 2) * conv.lng;
-  const hh = (h / 2) * conv.lat;
+  // Bounding box half-dimensions in METERS
+  const halfW_m = (widthM / 2) * cosR + (heightM / 2) * sinR;
+  const halfH_m = (widthM / 2) * sinR + (heightM / 2) * cosR;
 
-  // For the image overlay bounds, we need the axis-aligned bounding box
-  // that contains the rotated rectangle
-  const rad = rotation * Math.PI / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  const bw = hw * cos + hh * sin;
-  const bh = hw * sin + hh * cos;
+  // Now convert each axis to degrees independently
+  const bw = halfW_m * conv.lng;
+  const bh = halfH_m * conv.lat;
 
   return L.latLngBounds(
     [center.lat - bh, center.lng - bw],
@@ -1391,23 +1426,21 @@ function getHousePlanBounds(center, rotation) {
   );
 }
 
-function createHousePlanOverlay(svgContent, center, rotation) {
-  // Create a custom SVG overlay using L.SVGOverlay (Leaflet 1.8+) or image overlay
-  const bounds = getHousePlanBounds(center, rotation);
+function getHousePlanBounds(center, rotation) {
+  return getPlanBounds(center, housePlanState.widthM, housePlanState.heightM, rotation);
+}
 
-  // Build a wrapper SVG that includes rotation
-  const w = housePlanState.widthM;
-  const h = housePlanState.heightM;
-  const conv = metersToLatLng(1, center.lat);
-  const rad = rotation * Math.PI / 180;
-  const cos_r = Math.abs(Math.cos(rad));
-  const sin_r = Math.abs(Math.sin(rad));
-  const bboxW = w * cos_r + h * sin_r;  // meters
-  const bboxH = w * sin_r + h * cos_r;
+// Shared: create SVG overlay with internal SVG rotation transform
+function createPlanOverlay(svgContent, center, rotation, widthM, heightM, className) {
+  const bounds = getPlanBounds(center, widthM, heightM, rotation);
 
-  // SVG viewBox in mm (the source SVG is in mm)
-  const srcWmm = housePlanState.widthM * 1000;
-  const srcHmm = housePlanState.heightM * 1000;
+  const rad = (rotation || 0) * Math.PI / 180;
+  const cosR = Math.abs(Math.cos(rad));
+  const sinR = Math.abs(Math.sin(rad));
+  const bboxW = widthM * cosR + heightM * sinR;
+  const bboxH = widthM * sinR + heightM * cosR;
+  const srcWmm = widthM * 1000;
+  const srcHmm = heightM * 1000;
   const bboxWmm = bboxW * 1000;
   const bboxHmm = bboxH * 1000;
 
@@ -1417,18 +1450,20 @@ function createHousePlanOverlay(svgContent, center, rotation) {
     </g>
   </svg>`;
 
-  // Create SVG overlay
   const parser = new DOMParser();
   const svgDoc = parser.parseFromString(wrappedSvg, 'image/svg+xml');
   const svgEl = svgDoc.documentElement;
 
-  const overlay = L.svgOverlay(svgEl, bounds, {
+  return L.svgOverlay(svgEl, bounds, {
     interactive: true,
     pane: 'overlayPane',
-    className: 'house-plan-overlay'
+    className: className
   });
+}
 
-  return overlay;
+function createHousePlanOverlay(svgContent, center, rotation) {
+  return createPlanOverlay(svgContent, center, rotation,
+    housePlanState.widthM, housePlanState.heightM, 'house-plan-overlay');
 }
 
 function placeHousePlan() {
@@ -1607,17 +1642,235 @@ if (housePlanState.placed && housePlanState.center) {
   placeHousePlan();
 }
 
+// ============================
+// SHED PLAN SVG OVERLAY
+// ============================
+let shedPlanOverlay = null;
+let shedPlanState = {
+  placed: false,
+  locked: false,
+  center: null,
+  rotation: 0,
+  widthM: 16.0,
+  heightM: 8.0,
+  svgContent: null,
+  svgUrl: 'overlays/shed_plan.svg'
+};
+
+// Restore saved state — URL params override localStorage
+if (urlState.shedPlan) {
+  shedPlanState.placed = true;
+  shedPlanState.center = L.latLng(urlState.shedPlan.lat, urlState.shedPlan.lng);
+  shedPlanState.rotation = urlState.shedPlan.rotation || 0;
+  shedPlanState.locked = urlState.shedPlan.locked || false;
+} else {
+  try {
+    const saved = localStorage.getItem('shedPlanState');
+    if (saved) {
+      const s = JSON.parse(saved);
+      if (s.placed) {
+        shedPlanState = { ...shedPlanState, ...s };
+        shedPlanState.center = L.latLng(s.center.lat, s.center.lng);
+      }
+    }
+  } catch(e) {}
+}
+
+function saveShedPlanState() {
+  const s = { ...shedPlanState };
+  if (s.center) s.center = { lat: s.center.lat, lng: s.center.lng };
+  delete s.svgContent;
+  localStorage.setItem('shedPlanState', JSON.stringify(s));
+  UrlState.push();
+}
+
+function getShedPlanBounds(center, rotation) {
+  return getPlanBounds(center, shedPlanState.widthM, shedPlanState.heightM, rotation);
+}
+
+function createShedPlanOverlay(svgContent, center, rotation) {
+  return createPlanOverlay(svgContent, center, rotation,
+    shedPlanState.widthM, shedPlanState.heightM, 'shed-plan-overlay');
+}
+
+function placeShedPlan() {
+  const center = shedPlanState.center || map.getCenter();
+  shedPlanState.center = center;
+  shedPlanState.placed = true;
+
+  if (!shedPlanState.svgContent) {
+    fetch(shedPlanState.svgUrl)
+      .then(r => r.text())
+      .then(svg => {
+        const match = svg.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
+        shedPlanState.svgContent = match ? match[1] : svg;
+        renderShedPlan();
+      })
+      .catch(e => console.error('Failed to load shed plan SVG:', e));
+  } else {
+    renderShedPlan();
+  }
+}
+
+function renderShedPlan() {
+  if (shedPlanOverlay) {
+    map.removeLayer(shedPlanOverlay);
+  }
+  shedPlanOverlay = createShedPlanOverlay(
+    shedPlanState.svgContent,
+    shedPlanState.center,
+    shedPlanState.rotation
+  );
+  shedPlanOverlay.addTo(map);
+
+  if (!shedPlanState.locked) {
+    enableShedPlanDrag();
+  }
+
+  document.getElementById('shedPlanControls').classList.add('visible');
+  document.getElementById('shedPlanRotation').value = shedPlanState.rotation;
+  document.getElementById('shedPlanRotVal').textContent = shedPlanState.rotation + '°';
+
+  updateShedPlanInList();
+  saveShedPlanState();
+}
+
+function enableShedPlanDrag() {
+  if (!shedPlanOverlay) return;
+  const el = shedPlanOverlay.getElement();
+  if (!el) return;
+  el.style.cursor = 'move';
+
+  let dragging = false;
+  let startLatLng = null;
+
+  function onMouseDown(e) {
+    if (shedPlanState.locked) return;
+    dragging = true;
+    startLatLng = map.mouseEventToLatLng(e);
+    map.dragging.disable();
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  function onMouseMove(e) {
+    if (!dragging) return;
+    const cur = map.mouseEventToLatLng(e);
+    shedPlanState.center = L.latLng(
+      shedPlanState.center.lat + cur.lat - startLatLng.lat,
+      shedPlanState.center.lng + cur.lng - startLatLng.lng
+    );
+    startLatLng = cur;
+    shedPlanOverlay.setBounds(getShedPlanBounds(shedPlanState.center, shedPlanState.rotation));
+  }
+  function onMouseUp() {
+    if (!dragging) return;
+    dragging = false;
+    map.dragging.enable();
+    saveShedPlanState();
+  }
+
+  el.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+
+  el.addEventListener('touchstart', function(e) {
+    if (shedPlanState.locked) return;
+    const t = e.touches[0];
+    onMouseDown({ clientX: t.clientX, clientY: t.clientY, stopPropagation: () => e.stopPropagation(), preventDefault: () => e.preventDefault() });
+  }, { passive: false });
+  document.addEventListener('touchmove', function(e) {
+    if (!dragging) return;
+    const t = e.touches[0];
+    onMouseMove({ clientX: t.clientX, clientY: t.clientY });
+  });
+  document.addEventListener('touchend', function() { onMouseUp(); });
+
+  shedPlanOverlay._dragCleanup = () => {
+    el.removeEventListener('mousedown', onMouseDown);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+}
+
+function lockShedPlan() {
+  shedPlanState.locked = !shedPlanState.locked;
+  const btn = document.querySelector('#shedPlanControls .house-plan-btn-row button:first-child');
+  if (btn) btn.textContent = shedPlanState.locked ? 'Unlock Position' : 'Lock Position';
+  if (shedPlanOverlay) {
+    const el = shedPlanOverlay.getElement();
+    if (el) el.style.cursor = shedPlanState.locked ? 'default' : 'move';
+  }
+  saveShedPlanState();
+}
+
+function removeShedPlan() {
+  if (shedPlanOverlay) {
+    if (shedPlanOverlay._dragCleanup) shedPlanOverlay._dragCleanup();
+    map.removeLayer(shedPlanOverlay);
+    shedPlanOverlay = null;
+  }
+  shedPlanState.placed = false;
+  shedPlanState.locked = false;
+  shedPlanState.center = null;
+  shedPlanState.rotation = 0;
+  document.getElementById('shedPlanControls').classList.remove('visible');
+  document.getElementById('shedPlanRotation').value = 0;
+  document.getElementById('shedPlanRotVal').textContent = '0°';
+  localStorage.removeItem('shedPlanState');
+  // Remove from elements list
+  const idx = placedElements.findIndex(e => e.id === 'shedPlan');
+  if (idx >= 0) placedElements.splice(idx, 1);
+  updateElementsList();
+  UrlState.push();
+}
+
+function updateShedPlanInList() {
+  const existing = placedElements.find(e => e.id === 'shedPlan');
+  if (!existing && shedPlanState.placed) {
+    placedElements.push({
+      id: 'shedPlan',
+      layer: shedPlanOverlay,
+      type: { id: 'garage', name: 'Shed Plan (16×8m)', icon: '🏗️', color: '#6677cc' },
+      measurement: shedPlanState.widthM.toFixed(0) + 'm × ' + shedPlanState.heightM.toFixed(0) + 'm'
+    });
+    updateElementsList();
+  }
+}
+
+// Shed rotation slider handler
+document.getElementById('shedPlanRotation').addEventListener('input', function(e) {
+  shedPlanState.rotation = parseInt(e.target.value);
+  document.getElementById('shedPlanRotVal').textContent = shedPlanState.rotation + '°';
+  if (shedPlanState.placed && shedPlanState.svgContent) {
+    renderShedPlan();
+  }
+});
+
+// Restore shed plan on page load if previously placed
+if (shedPlanState.placed && shedPlanState.center) {
+  placeShedPlan();
+}
+
 function startDrawing(el) {
   // Handle house plan placement specially
   if (el.type === 'housePlan') {
     if (housePlanState.placed) {
-      // Already placed — toggle controls visibility
       const ctrl = document.getElementById('housePlanControls');
       ctrl.classList.toggle('visible');
       return;
     }
-    // Place the house plan at map center
     placeHousePlan();
+    return;
+  }
+
+  // Handle shed plan placement
+  if (el.type === 'shedPlan') {
+    if (shedPlanState.placed) {
+      const ctrl = document.getElementById('shedPlanControls');
+      ctrl.classList.toggle('visible');
+      return;
+    }
+    placeShedPlan();
     return;
   }
 
@@ -1753,6 +2006,10 @@ function updateElementsList() {
 function removeElement(id) {
   if (id === 'housePlan') {
     removeHousePlan();
+    return;
+  }
+  if (id === 'shedPlan') {
+    removeShedPlan();
     return;
   }
   const idx = placedElements.findIndex(e => e.id === id);

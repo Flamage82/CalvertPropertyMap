@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16000 8000">
+<g id="shed-plan">
+<!-- Background fill for visibility against satellite -->
+<polygon points="0,0 16000,0 16000,8000 0,8000" fill="white" fill-opacity="0.75" stroke="none"/>
+
+<!-- OUTER WALLS -->
+<g class="layer-walls" stroke="#000000" stroke-width="120" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Perimeter -->
+  <rect x="0" y="0" width="16000" height="8000"/>
+</g>
+
+<!-- COLUMN/POST GRID (steel portal frame) -->
+<g class="layer-columns" stroke="#444444" stroke-width="60" fill="#444444">
+  <!-- Front wall columns (y=0, every 4000mm) -->
+  <rect x="-100" y="-100" width="200" height="200"/>
+  <rect x="3900" y="-100" width="200" height="200"/>
+  <rect x="7900" y="-100" width="200" height="200"/>
+  <rect x="11900" y="-100" width="200" height="200"/>
+  <rect x="15900" y="-100" width="200" height="200"/>
+  <!-- Back wall columns (y=8000) -->
+  <rect x="-100" y="7900" width="200" height="200"/>
+  <rect x="3900" y="7900" width="200" height="200"/>
+  <rect x="7900" y="7900" width="200" height="200"/>
+  <rect x="11900" y="7900" width="200" height="200"/>
+  <rect x="15900" y="7900" width="200" height="200"/>
+</g>
+
+<!-- BAY DIVIDER LINES (dashed, showing structural bays) -->
+<g class="layer-bays" stroke="#999999" stroke-width="30" stroke-dasharray="200,150" fill="none">
+  <line x1="4000" y1="0" x2="4000" y2="8000"/>
+  <line x1="8000" y1="0" x2="8000" y2="8000"/>
+  <line x1="12000" y1="0" x2="12000" y2="8000"/>
+</g>
+
+<!-- ROLLER DOORS (front wall y=0, 3m wide centered in each 4m bay) -->
+<g class="layer-doors" stroke="#cc4400" stroke-width="80" fill="none" stroke-linecap="round">
+  <!-- Bay 1: roller door 500-3500 -->
+  <line x1="500" y1="0" x2="3500" y2="0"/>
+  <line x1="500" y1="-80" x2="500" y2="80"/>
+  <line x1="3500" y1="-80" x2="3500" y2="80"/>
+  <!-- Diagonal hatch marks indicating roller door -->
+  <line x1="800" y1="-200" x2="800" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="1400" y1="-200" x2="1400" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="2000" y1="-200" x2="2000" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="2600" y1="-200" x2="2600" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="3200" y1="-200" x2="3200" y2="200" stroke="#cc4400" stroke-width="30"/>
+
+  <!-- Bay 2: roller door 4500-7500 -->
+  <line x1="4500" y1="0" x2="7500" y2="0"/>
+  <line x1="4500" y1="-80" x2="4500" y2="80"/>
+  <line x1="7500" y1="-80" x2="7500" y2="80"/>
+  <line x1="4800" y1="-200" x2="4800" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="5400" y1="-200" x2="5400" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="6000" y1="-200" x2="6000" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="6600" y1="-200" x2="6600" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="7200" y1="-200" x2="7200" y2="200" stroke="#cc4400" stroke-width="30"/>
+
+  <!-- Bay 3: roller door 8500-11500 -->
+  <line x1="8500" y1="0" x2="11500" y2="0"/>
+  <line x1="8500" y1="-80" x2="8500" y2="80"/>
+  <line x1="11500" y1="-80" x2="11500" y2="80"/>
+  <line x1="8800" y1="-200" x2="8800" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="9400" y1="-200" x2="9400" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="10000" y1="-200" x2="10000" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="10600" y1="-200" x2="10600" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="11200" y1="-200" x2="11200" y2="200" stroke="#cc4400" stroke-width="30"/>
+
+  <!-- Bay 4: roller door 12500-15500 -->
+  <line x1="12500" y1="0" x2="15500" y2="0"/>
+  <line x1="12500" y1="-80" x2="12500" y2="80"/>
+  <line x1="15500" y1="-80" x2="15500" y2="80"/>
+  <line x1="12800" y1="-200" x2="12800" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="13400" y1="-200" x2="13400" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="14000" y1="-200" x2="14000" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="14600" y1="-200" x2="14600" y2="200" stroke="#cc4400" stroke-width="30"/>
+  <line x1="15200" y1="-200" x2="15200" y2="200" stroke="#cc4400" stroke-width="30"/>
+</g>
+
+<!-- PERSONNEL DOOR (back wall, bay 1 area, 900mm wide) -->
+<g class="layer-pa-door" stroke="#cc4400" stroke-width="60" fill="none">
+  <line x1="1550" y1="8000" x2="2450" y2="8000"/>
+  <!-- Door swing arc -->
+  <path d="M 2450,8000 A 900,900 0 0,1 2450,7100" stroke="#cc4400" stroke-width="40" fill="none"/>
+  <line x1="2450" y1="7100" x2="2450" y2="8000" stroke="#cc4400" stroke-width="40"/>
+</g>
+
+<!-- SLIDING GLASS DOOR (back wall, bay 3 area, 1800mm wide) -->
+<g class="layer-glass-door" stroke="#2266cc" stroke-width="50" fill="none">
+  <!-- Frame -->
+  <rect x="9100" y="7880" width="1800" height="240" stroke="#2266cc" stroke-width="40" fill="rgba(100,160,255,0.15)"/>
+  <!-- Sliding panels -->
+  <line x1="10000" y1="7880" x2="10000" y2="8120"/>
+  <!-- Arrow showing slide direction -->
+  <line x1="9300" y1="8000" x2="9800" y2="8000" stroke="#2266cc" stroke-width="25"/>
+  <line x1="9700" y1="7940" x2="9800" y2="8000" stroke="#2266cc" stroke-width="25"/>
+  <line x1="9700" y1="8060" x2="9800" y2="8000" stroke="#2266cc" stroke-width="25"/>
+</g>
+
+<!-- WINDOWS (right end wall x=16000) -->
+<g class="layer-windows" stroke="#2266cc" stroke-width="40" fill="rgba(100,160,255,0.1)">
+  <!-- Window 1 -->
+  <rect x="15880" y="2800" width="240" height="1200"/>
+  <line x1="16000" y1="2800" x2="16000" y2="4000"/>
+  <!-- Window 2 -->
+  <rect x="15880" y="4800" width="240" height="1200"/>
+  <line x1="16000" y1="4800" x2="16000" y2="6000"/>
+</g>
+
+<!-- BAY LABELS -->
+<g class="layer-labels" fill="#666666" font-family="sans-serif" font-size="400" text-anchor="middle">
+  <text x="2000" y="4200">Bay 1</text>
+  <text x="6000" y="4200">Bay 2</text>
+  <text x="10000" y="4200">Bay 3</text>
+  <text x="14000" y="4200">Bay 4</text>
+</g>
+
+<!-- DIMENSION ANNOTATIONS -->
+<g class="layer-dims" stroke="#888888" stroke-width="20" fill="#888888" font-family="monospace" font-size="320">
+  <!-- Overall width: 16m along front -->
+  <line x1="0" y1="-600" x2="16000" y2="-600"/>
+  <line x1="0" y1="-450" x2="0" y2="-750"/>
+  <line x1="16000" y1="-450" x2="16000" y2="-750"/>
+  <text x="8000" y="-750" text-anchor="middle" font-size="350">16,000</text>
+
+  <!-- Overall depth: 8m along left -->
+  <line x1="-600" y1="0" x2="-600" y2="8000"/>
+  <line x1="-450" y1="0" x2="-750" y2="0"/>
+  <line x1="-450" y1="8000" x2="-750" y2="8000"/>
+  <text x="-750" y="4200" text-anchor="middle" font-size="350" transform="rotate(-90,-750,4000)">8,000</text>
+
+  <!-- Bay widths (4m each) -->
+  <line x1="0" y1="-300" x2="4000" y2="-300"/>
+  <text x="2000" y="-350" text-anchor="middle" font-size="280">4,000</text>
+  <line x1="4000" y1="-300" x2="8000" y2="-300"/>
+  <text x="6000" y="-350" text-anchor="middle" font-size="280">4,000</text>
+  <line x1="8000" y1="-300" x2="12000" y2="-300"/>
+  <text x="10000" y="-350" text-anchor="middle" font-size="280">4,000</text>
+  <line x1="12000" y1="-300" x2="16000" y2="-300"/>
+  <text x="14000" y="-350" text-anchor="middle" font-size="280">4,000</text>
+</g>
+
+</g>
+</svg>
