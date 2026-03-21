@@ -466,20 +466,109 @@ function saveSettings(partial) {
 const savedSettings = loadSettings();
 
 // ============================
+// URL STATE MANAGEMENT
+// ============================
+const UrlState = {
+  _timerId: null,
+
+  // Parse current URL query string into state object
+  parse() {
+    const p = new URLSearchParams(window.location.search);
+    const state = {};
+    if (p.has('lat') && p.has('lng')) {
+      state.lat = parseFloat(p.get('lat'));
+      state.lng = parseFloat(p.get('lng'));
+    }
+    if (p.has('z')) state.zoom = parseInt(p.get('z'));
+    if (p.has('base')) state.basemap = p.get('base');
+    // Layers: "cadastre,vegetation" or "cadastre:70,vegetation:50" (with optional opacity)
+    if (p.has('layers')) {
+      state.layers = {};
+      p.get('layers').split(',').filter(Boolean).forEach(tok => {
+        const [id, op] = tok.split(':');
+        state.layers[id] = { active: true, opacity: op ? parseInt(op) / 100 : undefined };
+      });
+    }
+    // Layer opacities only (if layers param isn't set but opacities are)
+    if (p.has('hp_lat') && p.has('hp_lng')) {
+      state.housePlan = {
+        lat: parseFloat(p.get('hp_lat')),
+        lng: parseFloat(p.get('hp_lng')),
+        rotation: p.has('hp_rot') ? parseInt(p.get('hp_rot')) : 0,
+        locked: p.get('hp_lock') === '1'
+      };
+    }
+    if (p.has('panel')) state.panel = p.get('panel');
+    return state;
+  },
+
+  // Build query string from current app state (called after map is created)
+  serialize() {
+    const p = new URLSearchParams();
+    if (typeof map !== 'undefined') {
+      const c = map.getCenter();
+      p.set('lat', c.lat.toFixed(6));
+      p.set('lng', c.lng.toFixed(6));
+      p.set('z', map.getZoom());
+    }
+    p.set('base', currentBasemap);
+    // Active layers with opacity
+    const layerTokens = [];
+    govLayerDefs.forEach(def => {
+      const isActive = govLayerInstances[def.id] && map.hasLayer(govLayerInstances[def.id]);
+      if (isActive) {
+        const op = Math.round(def.opacity * 100);
+        layerTokens.push(op !== 70 ? `${def.id}:${op}` : def.id);
+      }
+    });
+    if (layerTokens.length > 0) p.set('layers', layerTokens.join(','));
+    // House plan
+    if (housePlanState.placed && housePlanState.center) {
+      p.set('hp_lat', housePlanState.center.lat.toFixed(6));
+      p.set('hp_lng', housePlanState.center.lng.toFixed(6));
+      if (housePlanState.rotation) p.set('hp_rot', housePlanState.rotation);
+      if (housePlanState.locked) p.set('hp_lock', '1');
+    }
+    // Panel state
+    const panel = document.getElementById('sidePanel');
+    if (panel && panel.classList.contains('collapsed')) p.set('panel', 'closed');
+    return p.toString();
+  },
+
+  // Push current state to URL (replaceState, no page reload, debounced 150ms)
+  push() {
+    clearTimeout(this._timerId);
+    this._timerId = setTimeout(() => {
+      try {
+        const qs = this.serialize();
+        const newUrl = window.location.pathname + (qs ? '?' + qs : '');
+        window.history.replaceState(null, '', newUrl);
+      } catch(e) { console.warn('UrlState.push error:', e); }
+    }, 150);
+  }
+};
+
+const urlState = UrlState.parse();
+
+// ============================
 // MAP INITIALIZATION
 // ============================
 const BLOCK_CENTER = [-27.671668, 152.494575];
 const BLOCK_ZOOM = 17;
 
+// URL params override defaults
+const initCenter = (urlState.lat !== undefined) ? [urlState.lat, urlState.lng] : BLOCK_CENTER;
+const initZoom = urlState.zoom || BLOCK_ZOOM;
+
 const map = L.map('map', {
-  center: BLOCK_CENTER,
-  zoom: BLOCK_ZOOM,
+  center: initCenter,
+  zoom: initZoom,
   zoomControl: true,
   attributionControl: true
 });
 
-// Offset map center to account for side panel
-map.panBy([160, 0], { animate: false });
+// Offset map center to account for side panel (only if no URL state set the view)
+if (!urlState.lat) map.panBy([160, 0], { animate: false });
 
 // Update cursor coordinates
 map.on('mousemove', function(e) {
@@ -509,7 +598,7 @@ const basemaps = {
   })
 };
 
-let currentBasemap = savedSettings.basemap || 'street';
+let currentBasemap = urlState.basemap || savedSettings.basemap || 'street';
 basemaps[currentBasemap].addTo(map);
 
 // Highlight the correct basemap button on load
@@ -527,6 +616,7 @@ function setBasemap(name) {
   saveSettings({ basemap: name });
   document.querySelectorAll('.basemap-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
+  UrlState.push();
 }
 
 // ============================
@@ -669,14 +759,26 @@ const govLayerDefs = [
 
 const govLayerInstances = {};
 
-// Restore saved layer states (active/opacity) from localStorage
+// Restore saved layer states — URL params take priority over localStorage
 const savedLayers = savedSettings.layers || {};
-govLayerDefs.forEach(def => {
-  if (savedLayers[def.id] !== undefined) {
-    def.active = savedLayers[def.id].active;
-    if (savedLayers[def.id].opacity !== undefined) def.opacity = savedLayers[def.id].opacity;
-  }
-});
+if (urlState.layers) {
+  // URL explicitly defines which layers are active — turn all off first, then enable listed ones
+  govLayerDefs.forEach(def => {
+    if (urlState.layers[def.id]) {
+      def.active = true;
+      if (urlState.layers[def.id].opacity !== undefined) def.opacity = urlState.layers[def.id].opacity;
+    } else {
+      def.active = false;
+    }
+  });
+} else {
+  govLayerDefs.forEach(def => {
+    if (savedLayers[def.id] !== undefined) {
+      def.active = savedLayers[def.id].active;
+      if (savedLayers[def.id].opacity !== undefined) def.opacity = savedLayers[def.id].opacity;
+    }
+  });
+}
 
 // Shared style function for GeoJSON overlay features
 function getOverlayStyle(feature, def, opacityOverride) {
@@ -893,6 +995,7 @@ function saveLayerStates() {
     };
   });
   saveSettings({ layers: states });
+  UrlState.push();
 }
 
 // Build layer toggles UI
@@ -1029,23 +1132,31 @@ let housePlanState = {
   svgUrl: 'overlays/house_plan.svg'
 };
 
-// Restore saved state
-try {
-  const saved = localStorage.getItem('housePlanState');
-  if (saved) {
-    const s = JSON.parse(saved);
-    if (s.placed) {
-      housePlanState = { ...housePlanState, ...s };
-      housePlanState.center = L.latLng(s.center.lat, s.center.lng);
+// Restore saved state — URL params override localStorage
+if (urlState.housePlan) {
+  housePlanState.placed = true;
+  housePlanState.center = L.latLng(urlState.housePlan.lat, urlState.housePlan.lng);
+  housePlanState.rotation = urlState.housePlan.rotation || 0;
+  housePlanState.locked = urlState.housePlan.locked || false;
+} else {
+  try {
+    const saved = localStorage.getItem('housePlanState');
+    if (saved) {
+      const s = JSON.parse(saved);
+      if (s.placed) {
+        housePlanState = { ...housePlanState, ...s };
+        housePlanState.center = L.latLng(s.center.lat, s.center.lng);
+      }
     }
-  }
-} catch(e) {}
+  } catch(e) {}
+}
 
 function saveHousePlanState() {
   const s = { ...housePlanState };
   if (s.center) s.center = { lat: s.center.lat, lng: s.center.lng };
   delete s.svgContent;
   localStorage.setItem('housePlanState', JSON.stringify(s));
+  UrlState.push();
 }
 
 function metersToLatLng(meters, lat) {
@@ -1264,6 +1375,7 @@ function removeHousePlan() {
   document.getElementById('housePlanRotVal').textContent = '0°';
   localStorage.removeItem('housePlanState');
   updateElementsList();
+  UrlState.push();
 }
 
 function updateHousePlanInList() {
@@ -1525,6 +1637,7 @@ function togglePanel() {
   const toggle = document.getElementById('panelToggle');
   panel.classList.toggle('collapsed');
   toggle.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
+  UrlState.push();
 }
 
 // ============================
@@ -1691,6 +1804,21 @@ async function updateCacheStatus() {
 
 // Update cache status on load
 TileCache.init().then(() => updateCacheStatus());
+
+// ============================
+// URL STATE — live sync on map events
+// ============================
+map.on('moveend zoomend', () => UrlState.push());
+
+// Restore panel state from URL
+if (urlState.panel === 'closed') {
+  const panel = document.getElementById('sidePanel');
+  const toggle = document.getElementById('panelToggle');
+  if (panel) { panel.classList.add('collapsed'); toggle.textContent = '▶'; }
+}
+
+// Push initial URL state (captures defaults + any URL overrides)
+setTimeout(() => UrlState.push(), 500);
 
 </script>
 </body>
