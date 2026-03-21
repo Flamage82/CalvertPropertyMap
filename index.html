@@ -528,12 +528,23 @@ const govLayerDefs = [
     active: false
   },
   {
-    id: 'fire_history',
-    name: 'Fire History',
-    desc: 'QPWS fire & treatment history',
+    id: 'bushfire_prone',
+    name: 'Bushfire Prone Area',
+    desc: 'BAL risk — Very High / High / Medium intensity',
     color: '#ff5533',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Environment/ParksFireHistory/MapServer',
-    type: 'dynamic',
+    url: 'https://tiles.arcgis.com/tiles/vkTwD8kHw2woKBqV/arcgis/rest/services/Bushfire_Prone_Areas/MapServer',
+    type: 'tiled',
+    layers: [],
+    opacity: 0.55,
+    active: false
+  },
+  {
+    id: 'bushfire_hazard',
+    name: 'Bushfire Hazard Area',
+    desc: 'Hazard area incl. 100m impact buffer',
+    color: '#cc3311',
+    url: 'https://tiles.arcgis.com/tiles/0feS4n90HMqhF4HA/arcgis/rest/services/Bushfire_Hazard_Area/MapServer',
+    type: 'tiled',
     layers: [],
     opacity: 0.5,
     active: false
@@ -550,44 +561,11 @@ const govLayerDefs = [
     active: false
   },
   {
-    id: 'contours_5m',
-    name: 'Contours LiDAR (5m)',
-    desc: '5m LiDAR contours (SE QLD)',
-    color: '#bb7733',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
-    type: 'dynamic',
-    layers: [20],
-    opacity: 0.6,
-    active: false
-  },
-  {
-    id: 'contours_10m',
-    name: 'Contours SRTM (10m)',
-    desc: '10m SRTM contours (statewide)',
-    color: '#aa6622',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
-    type: 'dynamic',
-    layers: [10],
-    opacity: 0.5,
-    active: false
-  },
-  {
     id: 'landuse',
     name: 'Land Use',
     desc: 'Current land use classification',
     color: '#aa77dd',
     url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/PlanningCadastre/LandUse/MapServer',
-    type: 'dynamic',
-    layers: [],
-    opacity: 0.45,
-    active: false
-  },
-  {
-    id: 'env_sensitive',
-    name: 'Environmentally Sensitive Areas',
-    desc: 'Category A sensitive areas',
-    color: '#ffaa22',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Environment/EnvironmentallySensitiveAreasCategoryA/MapServer',
     type: 'dynamic',
     layers: [],
     opacity: 0.45,
@@ -618,6 +596,14 @@ govLayerDefs.forEach(def => {
 });
 
 function createGovLayer(def) {
+  if (def.type === 'tiled') {
+    return L.esri.tiledMapLayer({
+      url: def.url,
+      opacity: def.opacity,
+      maxZoom: 20,
+      pane: 'overlayPane'
+    });
+  }
   const opts = {
     url: def.url,
     opacity: def.opacity,
