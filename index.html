@@ -189,6 +189,17 @@
   .house-plan-btn-row button.danger { color: #ff6666; }
   .house-plan-btn-row button.danger:hover { background: rgba(255,60,60,0.15); }
 
+  /* Rotation handle */
+  .rotation-handle {
+    width: 28px; height: 28px;
+    cursor: grab;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));
+    transition: transform 0.1s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .rotation-handle:hover { transform: scale(1.2); }
+  .rotation-handle.dragging { cursor: grabbing; transform: scale(1.3); }
+
   /* Contour elevation labels */
   .contour-label {
     background: none !important; border: none !important; box-shadow: none !important;
@@ -1326,12 +1337,11 @@ sitePlanElements.forEach(el => {
     controls.className = 'house-plan-controls';
     controls.id = 'housePlanControls';
     controls.innerHTML = `
-      <label>Rotation</label>
       <div class="control-row">
-        <input type="range" id="housePlanRotation" min="0" max="360" value="0" step="1">
+        <label style="margin:0">Rotation</label>
         <span class="value-display" id="housePlanRotVal">0°</span>
       </div>
-      <div class="hint">Drag the plan on the map to reposition. Use the slider to rotate.</div>
+      <div class="hint">Drag to move. Drag corner handles to rotate.</div>
       <div class="house-plan-btn-row">
         <button onclick="lockHousePlan()">Lock Position</button>
         <button class="danger" onclick="removeHousePlan()">Remove</button>
@@ -1346,12 +1356,11 @@ sitePlanElements.forEach(el => {
     controls.className = 'house-plan-controls';
     controls.id = 'shedPlanControls';
     controls.innerHTML = `
-      <label>Rotation</label>
       <div class="control-row">
-        <input type="range" id="shedPlanRotation" min="0" max="360" value="0" step="1">
+        <label style="margin:0">Rotation</label>
         <span class="value-display" id="shedPlanRotVal">0°</span>
       </div>
-      <div class="hint">Drag the shed on the map to reposition. Use the slider to rotate.</div>
+      <div class="hint">Drag to move. Drag corner handles to rotate.</div>
       <div class="house-plan-btn-row">
         <button onclick="lockShedPlan()">Lock Position</button>
         <button class="danger" onclick="removeShedPlan()">Remove</button>
@@ -1365,6 +1374,7 @@ sitePlanElements.forEach(el => {
 // HOUSE PLAN SVG OVERLAY
 // ============================
 let housePlanOverlay = null;
+let housePlanHandles = null;
 let housePlanState = {
   placed: false,
   locked: false,
@@ -1469,6 +1479,124 @@ function createPlanOverlay(svgContent, center, rotation, widthM, heightM, classN
   });
 }
 
+// ============================
+// ROTATION HANDLE
+// ============================
+// Computes a single rotated corner position (top-right) for the rotation handle,
+// offset slightly outward so it doesn't overlap the overlay edge.
+function getRotationHandlePos(center, widthM, heightM, rotation) {
+  const conv = metersToLatLng(1, center.lat);
+  // Negate to match SVG overlay which uses rotate(-rotation)
+  const rad = -(rotation || 0) * Math.PI / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+  // Top-right corner with a small outward offset (2m past the corner)
+  const dx = widthM / 2 + 2;
+  const dy = -(heightM / 2 + 2);
+  const rx = dx * cosR - dy * sinR;
+  const ry = dx * sinR + dy * cosR;
+  return L.latLng(
+    center.lat - ry * conv.lat,
+    center.lng + rx * conv.lng
+  );
+}
+
+// Curved double-arrow SVG icon for rotation
+const ROTATE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 .34-.03.67-.08 1h2.02c.05-.33.06-.66.06-1 0-4.42-3.58-8-8-8z" fill="#fff" stroke="#333" stroke-width="0.5"/>
+  <path d="M12 20v3l4-4-4-4v3c-3.31 0-6-2.69-6-6 0-.34.03-.67.08-1H4.06c-.04.33-.06.66-.06 1 0 4.42 3.58 8 8 8z" fill="#fff" stroke="#333" stroke-width="0.5"/>
+</svg>`;
+
+// Creates or updates the single rotation handle for a plan overlay.
+function createRotationHandles(planState, renderFn, saveFn, cssClass) {
+  const handles = { markers: [], cleanup: null, _dragging: false };
+
+  function updateHandles() {
+    if (handles._dragging) return;
+
+    handles.markers.forEach(m => map.removeLayer(m));
+    handles.markers = [];
+
+    if (!planState.placed || !planState.center || planState.locked) return;
+
+    const handlePos = getRotationHandlePos(planState.center, planState.widthM, planState.heightM, planState.rotation);
+
+    const icon = L.divIcon({
+      className: 'rotation-handle',
+      html: ROTATE_ICON_SVG,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+
+    const marker = L.marker(handlePos, {
+      icon: icon,
+      draggable: true,
+      pane: 'markerPane',
+      zIndexOffset: 1000
+    }).addTo(map);
+
+    let startAngle = null;
+    let startRotation = null;
+
+    marker.on('dragstart', function(e) {
+      handles._dragging = true;
+      map.dragging.disable();
+      const el = marker.getElement();
+      if (el) el.classList.add('dragging');
+
+      // Record starting angle from center to handle position in map-space
+      // Map-space: mx = east (+lng), my = south (-lat on screen)
+      const conv = metersToLatLng(1, planState.center.lat);
+      const mx = (handlePos.lng - planState.center.lng) / conv.lng;
+      const my = (planState.center.lat - handlePos.lat) / conv.lat;
+      startAngle = Math.atan2(my, mx);
+      startRotation = planState.rotation;
+    });
+
+    marker.on('drag', function(e) {
+      const pos = marker.getLatLng();
+      const conv = metersToLatLng(1, planState.center.lat);
+      const mx = (pos.lng - planState.center.lng) / conv.lng;
+      const my = (planState.center.lat - pos.lat) / conv.lat;
+      const currentAngle = Math.atan2(my, mx);
+
+      // Delta angle: negative because atan2 increases counter-clockwise
+      // but our rotation convention is clockwise-positive
+      let deltaDeg = -(currentAngle - startAngle) * 180 / Math.PI;
+      let newRot = ((startRotation + deltaDeg) % 360 + 360) % 360;
+      planState.rotation = Math.round(newRot);
+
+      const displayId = cssClass === 'shed' ? 'shedPlanRotVal' : 'housePlanRotVal';
+      document.getElementById(displayId).textContent = planState.rotation + '°';
+
+      renderFn();
+    });
+
+    marker.on('dragend', function(e) {
+      handles._dragging = false;
+      map.dragging.enable();
+      const el = marker.getElement();
+      if (el) el.classList.remove('dragging');
+      saveFn();
+      updateHandles();
+    });
+
+    handles.markers.push(marker);
+  }
+
+  const onMapChange = () => { if (planState.placed && !planState.locked) updateHandles(); };
+  map.on('zoomend', onMapChange);
+
+  handles.update = updateHandles;
+  handles.cleanup = () => {
+    handles.markers.forEach(m => map.removeLayer(m));
+    handles.markers = [];
+    map.off('zoomend', onMapChange);
+  };
+
+  return handles;
+}
+
 function createHousePlanOverlay(svgContent, center, rotation) {
   return createPlanOverlay(svgContent, center, rotation,
     housePlanState.widthM, housePlanState.heightM, 'house-plan-overlay');
@@ -1515,8 +1643,13 @@ function renderHousePlan() {
 
   // Show controls
   document.getElementById('housePlanControls').classList.add('visible');
-  document.getElementById('housePlanRotation').value = housePlanState.rotation;
   document.getElementById('housePlanRotVal').textContent = housePlanState.rotation + '°';
+
+  // Create or update rotation handles
+  if (!housePlanHandles) {
+    housePlanHandles = createRotationHandles(housePlanState, renderHousePlan, saveHousePlanState, '');
+  }
+  housePlanHandles.update();
 
   // Update elements list
   updateHousePlanInList();
@@ -1539,6 +1672,8 @@ function enableHousePlanDrag() {
     dragging = true;
     startLatLng = map.mouseEventToLatLng(e);
     map.dragging.disable();
+    // Hide handles during drag for cleanliness
+    if (housePlanHandles) housePlanHandles.markers.forEach(m => map.removeLayer(m));
     e.stopPropagation();
     e.preventDefault();
   }
@@ -1565,6 +1700,8 @@ function enableHousePlanDrag() {
     dragging = false;
     map.dragging.enable();
     saveHousePlanState();
+    // Restore handles at new position
+    if (housePlanHandles) housePlanHandles.update();
   }
 
   el.addEventListener('mousedown', onMouseDown);
@@ -1594,13 +1731,15 @@ function enableHousePlanDrag() {
 
 function lockHousePlan() {
   housePlanState.locked = !housePlanState.locked;
-  const btn = document.querySelector('.house-plan-btn-row button:first-child');
+  const btn = document.querySelector('#housePlanControls .house-plan-btn-row button:first-child');
   if (btn) btn.textContent = housePlanState.locked ? 'Unlock Position' : 'Lock Position';
 
   if (housePlanOverlay) {
     const el = housePlanOverlay.getElement();
     if (el) el.style.cursor = housePlanState.locked ? 'default' : 'move';
   }
+  // Show/hide rotation handles based on lock state
+  if (housePlanHandles) housePlanHandles.update();
   saveHousePlanState();
 }
 
@@ -1610,12 +1749,12 @@ function removeHousePlan() {
     map.removeLayer(housePlanOverlay);
     housePlanOverlay = null;
   }
+  if (housePlanHandles) { housePlanHandles.cleanup(); housePlanHandles = null; }
   housePlanState.placed = false;
   housePlanState.locked = false;
   housePlanState.center = null;
   housePlanState.rotation = 0;
   document.getElementById('housePlanControls').classList.remove('visible');
-  document.getElementById('housePlanRotation').value = 0;
   document.getElementById('housePlanRotVal').textContent = '0°';
   localStorage.removeItem('housePlanState');
   updateElementsList();
@@ -1636,15 +1775,6 @@ function updateHousePlanInList() {
   }
 }
 
-// Rotation slider handler
-document.getElementById('housePlanRotation').addEventListener('input', function(e) {
-  housePlanState.rotation = parseInt(e.target.value);
-  document.getElementById('housePlanRotVal').textContent = housePlanState.rotation + '°';
-  if (housePlanState.placed && housePlanState.svgContent) {
-    renderHousePlan();
-  }
-});
-
 // Restore house plan on page load if previously placed
 if (housePlanState.placed && housePlanState.center) {
   placeHousePlan();
@@ -1654,6 +1784,7 @@ if (housePlanState.placed && housePlanState.center) {
 // SHED PLAN SVG OVERLAY
 // ============================
 let shedPlanOverlay = null;
+let shedPlanHandles = null;
 let shedPlanState = {
   placed: false,
   locked: false,
@@ -1736,8 +1867,13 @@ function renderShedPlan() {
   }
 
   document.getElementById('shedPlanControls').classList.add('visible');
-  document.getElementById('shedPlanRotation').value = shedPlanState.rotation;
   document.getElementById('shedPlanRotVal').textContent = shedPlanState.rotation + '°';
+
+  // Create or update rotation handles
+  if (!shedPlanHandles) {
+    shedPlanHandles = createRotationHandles(shedPlanState, renderShedPlan, saveShedPlanState, 'shed');
+  }
+  shedPlanHandles.update();
 
   updateShedPlanInList();
   saveShedPlanState();
@@ -1757,6 +1893,7 @@ function enableShedPlanDrag() {
     dragging = true;
     startLatLng = map.mouseEventToLatLng(e);
     map.dragging.disable();
+    if (shedPlanHandles) shedPlanHandles.markers.forEach(m => map.removeLayer(m));
     e.stopPropagation();
     e.preventDefault();
   }
@@ -1775,6 +1912,7 @@ function enableShedPlanDrag() {
     dragging = false;
     map.dragging.enable();
     saveShedPlanState();
+    if (shedPlanHandles) shedPlanHandles.update();
   }
 
   el.addEventListener('mousedown', onMouseDown);
@@ -1808,6 +1946,7 @@ function lockShedPlan() {
     const el = shedPlanOverlay.getElement();
     if (el) el.style.cursor = shedPlanState.locked ? 'default' : 'move';
   }
+  if (shedPlanHandles) shedPlanHandles.update();
   saveShedPlanState();
 }
 
@@ -1817,12 +1956,12 @@ function removeShedPlan() {
     map.removeLayer(shedPlanOverlay);
     shedPlanOverlay = null;
   }
+  if (shedPlanHandles) { shedPlanHandles.cleanup(); shedPlanHandles = null; }
   shedPlanState.placed = false;
   shedPlanState.locked = false;
   shedPlanState.center = null;
   shedPlanState.rotation = 0;
   document.getElementById('shedPlanControls').classList.remove('visible');
-  document.getElementById('shedPlanRotation').value = 0;
   document.getElementById('shedPlanRotVal').textContent = '0°';
   localStorage.removeItem('shedPlanState');
   // Remove from elements list
@@ -1844,15 +1983,6 @@ function updateShedPlanInList() {
     updateElementsList();
   }
 }
-
-// Shed rotation slider handler
-document.getElementById('shedPlanRotation').addEventListener('input', function(e) {
-  shedPlanState.rotation = parseInt(e.target.value);
-  document.getElementById('shedPlanRotVal').textContent = shedPlanState.rotation + '°';
-  if (shedPlanState.placed && shedPlanState.svgContent) {
-    renderShedPlan();
-  }
-});
 
 // Restore shed plan on page load if previously placed
 if (shedPlanState.placed && shedPlanState.center) {
