@@ -196,6 +196,13 @@
     padding: 0 !important; white-space: nowrap;
   }
 
+  /* Grid distance labels */
+  .grid-label {
+    background: none !important; border: none !important; box-shadow: none !important;
+    font-size: 9px; font-weight: 500; color: #66aacc; text-shadow: 0 0 3px rgba(0,0,0,0.7);
+    padding: 0 !important; white-space: nowrap; font-family: monospace;
+  }
+
   /* Responsive */
   @media (max-width: 768px) {
     .panel { width: 280px; }
@@ -228,6 +235,22 @@
   <div class="section">
     <div class="section-title">QLD Government Layers</div>
     <div id="govLayers"></div>
+  </div>
+
+  <!-- Grid Overlay -->
+  <div class="section">
+    <div class="section-title">Grid Overlay</div>
+    <div class="layer-item" onclick="toggleGrid()">
+      <div class="layer-toggle" id="toggle-grid" style="--color: #66aacc"></div>
+      <div>
+        <div class="layer-label">10 m Grid</div>
+        <div class="layer-desc">Square grid at 10 m intervals with distance labels</div>
+      </div>
+    </div>
+    <div class="opacity-row">
+      <label>Opacity</label>
+      <input type="range" min="0" max="100" value="40" id="gridOpacitySlider" oninput="setGridOpacity(this.value / 100)" />
+    </div>
   </div>
 
   <!-- Drawing Tools -->
@@ -498,6 +521,10 @@ const UrlState = {
         locked: p.get('hp_lock') === '1'
       };
     }
+    if (p.has('grid')) {
+      state.grid = true;
+      state.gridOpacity = p.has('grid_op') ? parseInt(p.get('grid_op')) / 100 : undefined;
+    }
     if (p.has('panel')) state.panel = p.get('panel');
     return state;
   },
@@ -522,6 +549,12 @@ const UrlState = {
       }
     });
     if (layerTokens.length > 0) p.set('layers', layerTokens.join(','));
+    // Grid
+    if (gridState.active) {
+      p.set('grid', '1');
+      const gop = Math.round(gridState.opacity * 100);
+      if (gop !== 40) p.set('grid_op', gop);
+    }
     // House plan
     if (housePlanState.placed && housePlanState.center) {
       p.set('hp_lat', housePlanState.center.lat.toFixed(6));
@@ -1061,6 +1094,174 @@ function setLayerOpacity(id, opacity) {
     }
   }
   saveLayerStates();
+}
+
+// ============================
+// 10 m GRID OVERLAY
+// ============================
+let gridLayer = null;
+let gridState = {
+  active: false,
+  opacity: 0.4
+};
+
+// Restore from URL or localStorage
+if (urlState.grid) {
+  gridState.active = true;
+  if (urlState.gridOpacity !== undefined) gridState.opacity = urlState.gridOpacity;
+} else if (savedSettings.grid) {
+  gridState.active = savedSettings.grid.active || false;
+  if (savedSettings.grid.opacity !== undefined) gridState.opacity = savedSettings.grid.opacity;
+}
+
+// Custom Leaflet layer that draws a metric grid
+L.GridOverlay = L.LayerGroup.extend({
+  options: { spacing: 10, opacity: 0.4 },
+
+  initialize(options) {
+    L.LayerGroup.prototype.initialize.call(this);
+    L.setOptions(this, options);
+  },
+
+  onAdd(map) {
+    L.LayerGroup.prototype.onAdd.call(this, map);
+    this._map = map;
+    this._draw();
+    map.on('moveend zoomend', this._draw, this);
+    return this;
+  },
+
+  onRemove(map) {
+    map.off('moveend zoomend', this._draw, this);
+    this.clearLayers();
+    L.LayerGroup.prototype.onRemove.call(this, map);
+  },
+
+  setOpacity(opacity) {
+    this.options.opacity = opacity;
+    this.eachLayer(lyr => {
+      if (lyr.setStyle) lyr.setStyle({ opacity: opacity });
+      if (lyr.setOpacity) lyr.setOpacity(opacity);
+    });
+  },
+
+  _draw() {
+    this.clearLayers();
+    const map = this._map;
+    if (!map) return;
+    const zoom = map.getZoom();
+    if (zoom < 16) return; // Grid only visible at close zoom
+
+    const bounds = map.getBounds();
+    const spacing = this.options.spacing; // meters
+    const op = this.options.opacity;
+
+    // Reference point — use lot center for a stable origin
+    const refLat = BLOCK_CENTER[0];
+    const refLng = BLOCK_CENTER[1];
+
+    // Meters-per-degree at this latitude
+    const mPerDegLat = 111320;
+    const mPerDegLng = 111320 * Math.cos(refLat * Math.PI / 180);
+
+    const degPerGridLat = spacing / mPerDegLat;
+    const degPerGridLng = spacing / mPerDegLng;
+
+    // Grid range in grid-cell indices relative to refLat/refLng
+    const minI = Math.floor((bounds.getSouth() - refLat) / degPerGridLat) - 1;
+    const maxI = Math.ceil((bounds.getNorth() - refLat) / degPerGridLat) + 1;
+    const minJ = Math.floor((bounds.getWest() - refLng) / degPerGridLng) - 1;
+    const maxJ = Math.ceil((bounds.getEast() - refLng) / degPerGridLng) + 1;
+
+    // Cap total lines to prevent performance issues
+    if ((maxI - minI) > 200 || (maxJ - minJ) > 200) return;
+
+    const lineStyle = { color: '#66aacc', weight: 0.6, opacity: op, interactive: false };
+    const majorStyle = { color: '#66aacc', weight: 1.2, opacity: op * 1.2, interactive: false };
+
+    // Horizontal lines (constant lat)
+    for (let i = minI; i <= maxI; i++) {
+      const lat = refLat + i * degPerGridLat;
+      const isMajor = (i % 10 === 0); // Bold every 100m
+      const line = L.polyline(
+        [[lat, bounds.getWest()], [lat, bounds.getEast()]],
+        isMajor ? majorStyle : lineStyle
+      );
+      this.addLayer(line);
+
+      // Distance label on major lines
+      if (isMajor && zoom >= 18) {
+        const distM = i * spacing;
+        const label = L.marker([lat, bounds.getWest() + (bounds.getEast() - bounds.getWest()) * 0.02], {
+          icon: L.divIcon({
+            className: 'grid-label',
+            html: (distM >= 0 ? '+' : '') + distM + 'm',
+            iconSize: [40, 14],
+            iconAnchor: [0, 7]
+          }),
+          interactive: false
+        });
+        this.addLayer(label);
+      }
+    }
+
+    // Vertical lines (constant lng)
+    for (let j = minJ; j <= maxJ; j++) {
+      const lng = refLng + j * degPerGridLng;
+      const isMajor = (j % 10 === 0);
+      const line = L.polyline(
+        [[bounds.getSouth(), lng], [bounds.getNorth(), lng]],
+        isMajor ? majorStyle : lineStyle
+      );
+      this.addLayer(line);
+
+      if (isMajor && zoom >= 18) {
+        const distM = j * spacing;
+        const label = L.marker([bounds.getSouth() + (bounds.getNorth() - bounds.getSouth()) * 0.02, lng], {
+          icon: L.divIcon({
+            className: 'grid-label',
+            html: (distM >= 0 ? '+' : '') + distM + 'm',
+            iconSize: [40, 14],
+            iconAnchor: [20, 14]
+          }),
+          interactive: false
+        });
+        this.addLayer(label);
+      }
+    }
+  }
+});
+
+function toggleGrid() {
+  const toggle = document.getElementById('toggle-grid');
+  if (gridLayer && map.hasLayer(gridLayer)) {
+    map.removeLayer(gridLayer);
+    gridLayer = null;
+    gridState.active = false;
+    toggle.classList.remove('active');
+  } else {
+    gridLayer = new L.GridOverlay({ spacing: 10, opacity: gridState.opacity });
+    gridLayer.addTo(map);
+    gridState.active = true;
+    toggle.classList.add('active');
+  }
+  saveSettings({ grid: { active: gridState.active, opacity: gridState.opacity } });
+  UrlState.push();
+}
+
+function setGridOpacity(opacity) {
+  gridState.opacity = opacity;
+  if (gridLayer) gridLayer.setOpacity(opacity);
+  saveSettings({ grid: { active: gridState.active, opacity: gridState.opacity } });
+  UrlState.push();
+}
+
+// Initialize grid on load if previously active
+if (gridState.active) {
+  gridLayer = new L.GridOverlay({ spacing: 10, opacity: gridState.opacity });
+  gridLayer.addTo(map);
+  document.getElementById('toggle-grid').classList.add('active');
+  document.getElementById('gridOpacitySlider').value = gridState.opacity * 100;
 }
 
 // ============================
