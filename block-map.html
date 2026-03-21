@@ -365,14 +365,36 @@ const govLayerDefs = [
     active: false
   },
   {
-    id: 'contours',
-    name: 'Contours (10m)',
-    desc: 'Elevation contour lines',
+    id: 'contours_1m',
+    name: 'Contours LiDAR (1m)',
+    desc: 'High-detail 1m LiDAR contours',
     color: '#cc8844',
     url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
     type: 'dynamic',
-    layers: [10],
+    layers: [30],
+    opacity: 0.7,
+    active: false
+  },
+  {
+    id: 'contours_5m',
+    name: 'Contours LiDAR (5m)',
+    desc: '5m LiDAR contours (SE QLD)',
+    color: '#bb7733',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
+    type: 'dynamic',
+    layers: [20],
     opacity: 0.6,
+    active: false
+  },
+  {
+    id: 'contours_10m',
+    name: 'Contours SRTM (10m)',
+    desc: '10m SRTM contours (statewide)',
+    color: '#aa6622',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
+    type: 'dynamic',
+    layers: [10],
+    opacity: 0.5,
     active: false
   },
   {
