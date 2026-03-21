@@ -228,6 +228,7 @@
       <button class="basemap-btn active" onclick="setBasemap('street')">Street</button>
       <button class="basemap-btn" onclick="setBasemap('satellite')">Satellite</button>
       <button class="basemap-btn" onclick="setBasemap('topo')">Topo</button>
+      <button class="basemap-btn" onclick="setBasemap('qldaerial')">QLD Aerial</button>
     </div>
   </div>
 
@@ -643,6 +644,11 @@ const basemaps = {
     attribution: '&copy; Esri, HERE, Garmin, USGS',
     maxZoom: 22,
     maxNativeZoom: 17
+  }),
+  qldaerial: cachedTileLayer('https://spatial-img.information.qld.gov.au/arcgis/rest/services/Basemaps/LatestStateProgram_AllUsers/ImageServer/tile/{z}/{y}/{x}', {
+    attribution: '&copy; State of Queensland (Dept. of Natural Resources &amp; Mines)',
+    maxZoom: 22,
+    maxNativeZoom: 20
   })
 };
 
@@ -653,7 +659,7 @@ basemaps[currentBasemap].addTo(map);
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.basemap-btn').forEach(b => {
     b.classList.remove('active');
-    if (b.textContent.trim().toLowerCase() === currentBasemap) b.classList.add('active');
+    if (b.getAttribute('onclick')?.includes("'" + currentBasemap + "'")) b.classList.add('active');
   });
 });
 
