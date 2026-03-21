@@ -354,7 +354,7 @@
   </div>
 </div>
 
-<button class="panel-toggle" id="panelToggle" onclick="togglePanel()">◀</button>
+<button class="panel-toggle" id="panelToggle" onclick="togglePanel()">▶</button>
 
 <div class="feature-info-panel" id="featureInfoPanel" style="display:none;">
   <button class="close-btn" onclick="hideFeatureInfo()">✕</button>
@@ -2489,7 +2489,7 @@ function togglePanel() {
   const panel = document.getElementById('sidePanel');
   const toggle = document.getElementById('panelToggle');
   panel.classList.toggle('collapsed');
-  toggle.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
+  toggle.textContent = panel.classList.contains('collapsed') ? '◀' : '▶';
   UrlState.push();
 }
 
@@ -2686,7 +2686,7 @@ map.on('moveend zoomend', () => UrlState.push());
 if (urlState.panel === 'closed') {
   const panel = document.getElementById('sidePanel');
   const toggle = document.getElementById('panelToggle');
-  if (panel) { panel.classList.add('collapsed'); toggle.textContent = '▶'; }
+  if (panel) { panel.classList.add('collapsed'); toggle.textContent = '◀'; }
 }
 
 // Push initial URL state (captures defaults + any URL overrides)
