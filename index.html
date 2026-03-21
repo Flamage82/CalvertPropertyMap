@@ -528,25 +528,69 @@ const govLayerDefs = [
     active: false
   },
   {
-    id: 'bushfire_prone',
-    name: 'Bushfire Prone Area',
-    desc: 'BAL risk — Very High / High / Medium intensity',
+    id: 'icc_bushfire',
+    name: 'OV10 Bushfire Prone Areas',
+    desc: 'Ipswich Council bushfire risk overlay',
     color: '#ff5533',
-    url: 'https://tiles.arcgis.com/tiles/vkTwD8kHw2woKBqV/arcgis/rest/services/Bushfire_Prone_Areas/MapServer',
-    type: 'tiled',
+    url: 'overlays/ov10_overlay.geojson',
+    type: 'geojson',
     layers: [],
     opacity: 0.55,
     active: false
   },
   {
-    id: 'bushfire_hazard',
-    name: 'Bushfire Hazard Area',
-    desc: 'Hazard area incl. 100m impact buffer',
-    color: '#cc3311',
-    url: 'https://tiles.arcgis.com/tiles/0feS4n90HMqhF4HA/arcgis/rest/services/Bushfire_Hazard_Area/MapServer',
-    type: 'tiled',
+    id: 'icc_topography',
+    name: 'OV11 Topography & Landslide',
+    desc: 'Ipswich Council steep slopes & landslide risk',
+    color: '#cc6633',
+    url: 'overlays/ov11_overlay.geojson',
+    type: 'geojson',
     layers: [],
     opacity: 0.5,
+    active: false
+  },
+  {
+    id: 'icc_flood',
+    name: 'OV12 Flood Risk',
+    desc: 'Ipswich Council flood risk & overland flow',
+    color: '#3388dd',
+    url: 'overlays/ov12_overlay.geojson',
+    type: 'geojson',
+    layers: [],
+    opacity: 0.5,
+    active: false
+  },
+  {
+    id: 'icc_biodiversity',
+    name: 'OV1 Biodiversity',
+    desc: 'Ipswich Council biodiversity overlay',
+    color: '#22aa44',
+    url: 'overlays/ov1_overlay.geojson',
+    type: 'geojson',
+    layers: [],
+    opacity: 0.45,
+    active: false
+  },
+  {
+    id: 'icc_waterways',
+    name: 'OV2 Waterway Corridors',
+    desc: 'Ipswich Council waterway corridors & wetlands',
+    color: '#2266aa',
+    url: 'overlays/ov2_overlay.geojson',
+    type: 'geojson',
+    layers: [],
+    opacity: 0.45,
+    active: false
+  },
+  {
+    id: 'icc_catchments',
+    name: 'OV15 Water Catchments',
+    desc: 'Ipswich Council water resource catchments',
+    color: '#1177bb',
+    url: 'overlays/ov15_overlay.geojson',
+    type: 'geojson',
+    layers: [],
+    opacity: 0.4,
     active: false
   },
   {
@@ -595,14 +639,72 @@ govLayerDefs.forEach(def => {
   }
 });
 
+// Shared style function for GeoJSON overlay features
+function getOverlayStyle(feature, def, opacityOverride) {
+  const sub = feature.properties._sublayer || '';
+  const baseOpacity = opacityOverride !== undefined ? opacityOverride : def.opacity;
+  let color = def.color;
+  let fillOpacity = baseOpacity * 0.4;
+  let weight = 1;
+
+  // OV10 Bushfire: color by intensity
+  if (sub.includes('Very High')) { color = '#cc0000'; fillOpacity = baseOpacity * 0.6; }
+  else if (sub.includes('High') && !sub.includes('Very')) { color = '#ff4400'; fillOpacity = baseOpacity * 0.5; }
+  else if (sub.includes('Medium') && def.id === 'icc_bushfire') { color = '#ff8800'; fillOpacity = baseOpacity * 0.4; }
+  else if (sub.includes('Potential Impact')) { color = '#ffaa44'; fillOpacity = baseOpacity * 0.3; }
+
+  // OV11 Topography: color by slope
+  if (sub.includes('GT25')) { color = '#aa2200'; fillOpacity = baseOpacity * 0.5; }
+  else if (sub.includes('15%')) { color = '#cc6633'; fillOpacity = baseOpacity * 0.35; }
+
+  // OV12 Flood: color by risk level
+  if (sub.includes('Extreme')) { color = '#990066'; fillOpacity = baseOpacity * 0.5; }
+  else if (sub.includes('High Flood')) { color = '#cc0033'; fillOpacity = baseOpacity * 0.45; }
+  else if (sub.includes('Medium Flood')) { color = '#ff6600'; fillOpacity = baseOpacity * 0.35; }
+  else if (sub.includes('Low Flood') && !sub.includes('Very')) { color = '#ffaa00'; fillOpacity = baseOpacity * 0.25; }
+  else if (sub.includes('Very Low')) { color = '#ffdd66'; fillOpacity = baseOpacity * 0.15; }
+  else if (sub.includes('Overland Flow')) { color = '#3366cc'; fillOpacity = baseOpacity * 0.4; }
+
+  // OV1 Biodiversity: color by type
+  if (sub.includes('Strategic Corridor')) { color = '#116633'; fillOpacity = baseOpacity * 0.35; }
+  else if (sub.includes('State Environmental')) { color = '#228844'; fillOpacity = baseOpacity * 0.4; }
+  else if (sub.includes('Local Environmental')) { color = '#33aa55'; fillOpacity = baseOpacity * 0.35; }
+  else if (sub.includes('Regulated Vegetation')) { color = '#449933'; fillOpacity = baseOpacity * 0.3; }
+  else if (sub.includes('Waterway Barrier')) { color = '#2277aa'; fillOpacity = baseOpacity * 0.35; }
+
+  // OV2/OV15 Waterways: color by type (check Buffer first since it also matches the base name)
+  if (sub.includes('Major Waterway Buffer') || (def.id === 'icc_catchments' && sub.includes('Major') && sub.includes('Buffer'))) { color = '#1155aa'; fillOpacity = baseOpacity * 0.2; }
+  else if (sub.includes('Major Waterway') || (def.id === 'icc_catchments' && sub.includes('Major'))) { color = '#1155aa'; fillOpacity = baseOpacity * 0.5; weight = 2; }
+  else if (sub.includes('Medium Waterway Buffer') || (def.id === 'icc_catchments' && sub.includes('Medium') && sub.includes('Buffer'))) { color = '#2266aa'; fillOpacity = baseOpacity * 0.15; }
+  else if (sub.includes('Medium Waterway') || (def.id === 'icc_catchments' && sub.includes('Medium'))) { color = '#2266aa'; fillOpacity = baseOpacity * 0.45; weight = 2; }
+  else if (sub.includes('Minor Waterway Buffer') || (def.id === 'icc_catchments' && sub.includes('Minor') && sub.includes('Buffer'))) { color = '#3388bb'; fillOpacity = baseOpacity * 0.1; }
+  else if (sub.includes('Minor Waterway') || (def.id === 'icc_catchments' && sub.includes('Minor'))) { color = '#3388bb'; fillOpacity = baseOpacity * 0.4; }
+  else if (sub.includes('Wetland Buffer')) { color = '#44aacc'; fillOpacity = baseOpacity * 0.15; }
+  else if (sub.includes('Wetland') && !sub.includes('Buffer')) { color = '#44aacc'; fillOpacity = baseOpacity * 0.4; }
+
+  // OV15 specific
+  if (def.id === 'icc_catchments' && sub.includes('Supply Buffer')) { color = '#0055aa'; fillOpacity = baseOpacity * 0.15; }
+  else if (def.id === 'icc_catchments' && sub.includes('Catchment Area')) { color = '#1177bb'; fillOpacity = baseOpacity * 0.2; }
+
+  return { color: color, fillColor: color, fillOpacity: fillOpacity, weight: weight, opacity: baseOpacity };
+}
+
 function createGovLayer(def) {
-  if (def.type === 'tiled') {
-    return L.esri.tiledMapLayer({
-      url: def.url,
-      opacity: def.opacity,
-      maxZoom: 20,
-      pane: 'overlayPane'
+  if (def.type === 'geojson') {
+    // Load local GeoJSON file — returns a placeholder layer, data loaded async
+    const layer = L.geoJSON(null, {
+      pane: 'overlayPane',
+      style: function(feature) { return getOverlayStyle(feature, def); },
+      onEachFeature: function(feature, layer) {
+        const sub = feature.properties._sublayer || 'Unknown';
+        layer.bindPopup('<strong>' + def.name + '</strong><br>' + sub);
+      }
     });
+    // Async load the GeoJSON file
+    fetch(def.url).then(r => r.json()).then(data => {
+      layer.addData(data);
+    }).catch(e => console.warn('Failed to load overlay:', def.url, e));
+    return layer;
   }
   const opts = {
     url: def.url,
@@ -677,11 +779,18 @@ function toggleGovLayer(id) {
 }
 
 function setLayerOpacity(id, opacity) {
-  if (govLayerInstances[id]) {
-    govLayerInstances[id].setOpacity(opacity);
-  }
   const def = govLayerDefs.find(d => d.id === id);
   if (def) def.opacity = opacity;
+  if (govLayerInstances[id]) {
+    if (def && def.type === 'geojson') {
+      // GeoJSON layers need restyling — recreate the style
+      govLayerInstances[id].setStyle(function(feature) {
+        return getOverlayStyle(feature, def, opacity);
+      });
+    } else {
+      govLayerInstances[id].setOpacity(opacity);
+    }
+  }
   saveLayerStates();
 }
 
