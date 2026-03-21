@@ -630,18 +630,18 @@ map.on('mousemove', function(e) {
 const basemaps = {
   street: cachedTileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
-    maxZoom: 20,
+    maxZoom: 22,
     maxNativeZoom: 18,
     subdomains: 'abcd'
   }),
   satellite: cachedTileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: '&copy; Esri, Maxar, Earthstar Geographics',
-    maxZoom: 20,
+    maxZoom: 22,
     maxNativeZoom: 18
   }),
   topo: cachedTileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
     attribution: '&copy; Esri, HERE, Garmin, USGS',
-    maxZoom: 20,
+    maxZoom: 22,
     maxNativeZoom: 17
   })
 };
