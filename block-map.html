@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Block Map — 306-354 Sipples Road, Calvert QLD</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; }
+  #map { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1; }
+
+  /* Header bar */
+  .header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+    background: rgba(16, 16, 32, 0.92); backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 10px 20px; display: flex; align-items: center; gap: 16px;
+    height: 52px;
+  }
+  .header h1 { font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .header .subtitle { font-size: 12px; color: #8888aa; }
+  .header .coords { font-size: 11px; color: #6a6a8a; margin-left: auto; font-family: monospace; }
+
+  /* Side panel */
+  .panel {
+    position: fixed; top: 52px; right: 0; bottom: 0; width: 320px; z-index: 999;
+    background: rgba(16, 16, 32, 0.94); backdrop-filter: blur(12px);
+    border-left: 1px solid rgba(255,255,255,0.08);
+    overflow-y: auto; padding: 0;
+    transition: transform 0.3s ease;
+  }
+  .panel.collapsed { transform: translateX(320px); }
+  .panel-toggle {
+    position: fixed; top: 62px; right: 320px; z-index: 1000;
+    background: rgba(16, 16, 32, 0.92); border: 1px solid rgba(255,255,255,0.1);
+    border-right: none; color: #fff; padding: 8px 6px; cursor: pointer;
+    border-radius: 6px 0 0 6px; font-size: 14px;
+    transition: right 0.3s ease;
+  }
+  .panel.collapsed + .panel-toggle,
+  .panel.collapsed ~ .panel-toggle { right: 0; }
+
+  .section { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .section-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #8888aa; margin-bottom: 12px;
+  }
+
+  /* Layer toggles */
+  .layer-item {
+    display: flex; align-items: center; gap: 10px; padding: 6px 0;
+    cursor: pointer; user-select: none;
+  }
+  .layer-item:hover { opacity: 0.85; }
+  .layer-toggle {
+    width: 36px; height: 20px; border-radius: 10px;
+    background: #333; position: relative; transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .layer-toggle.active { background: var(--color, #4a9eff); }
+  .layer-toggle::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; transition: transform 0.2s;
+  }
+  .layer-toggle.active::after { transform: translateX(16px); }
+  .layer-label { font-size: 13px; color: #ccc; }
+  .layer-desc { font-size: 10px; color: #777; margin-top: 2px; }
+
+  /* Opacity slider */
+  .opacity-row { display: flex; align-items: center; gap: 8px; padding: 4px 0 2px 46px; }
+  .opacity-row label { font-size: 10px; color: #666; }
+  .opacity-row input[type=range] { flex: 1; height: 3px; accent-color: #4a9eff; }
+
+  /* Drawing tools */
+  .draw-btn {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; color: #ccc; cursor: pointer; font-size: 13px;
+    margin-bottom: 6px; width: 100%; transition: all 0.15s;
+  }
+  .draw-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+  .draw-btn.active { background: rgba(74, 158, 255, 0.2); border-color: #4a9eff; color: #4a9eff; }
+  .draw-icon { width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+
+  /* Element list */
+  .element-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    background: rgba(255,255,255,0.03); border-radius: 6px; margin-bottom: 4px;
+    font-size: 12px;
+  }
+  .element-item .color-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .element-item .name { flex: 1; color: #bbb; }
+  .element-item .area { color: #777; font-family: monospace; font-size: 11px; }
+  .element-item .delete-btn {
+    background: none; border: none; color: #ff4466; cursor: pointer;
+    font-size: 14px; padding: 0 4px; opacity: 0.6;
+  }
+  .element-item .delete-btn:hover { opacity: 1; }
+
+  /* Base map selector */
+  .basemap-row { display: flex; gap: 6px; }
+  .basemap-btn {
+    flex: 1; padding: 6px 8px; border-radius: 6px; font-size: 11px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    color: #aaa; cursor: pointer; text-align: center;
+  }
+  .basemap-btn.active { background: rgba(74, 158, 255, 0.2); border-color: #4a9eff; color: #fff; }
+
+  /* Measurement tooltip */
+  .measurement-tooltip {
+    background: rgba(0,0,0,0.8); color: #fff; padding: 4px 8px;
+    border-radius: 4px; font-size: 12px; font-family: monospace;
+    white-space: nowrap; border: 1px solid rgba(255,255,255,0.2);
+  }
+
+  /* Leaflet overrides */
+  .leaflet-control-zoom { border: none !important; }
+  .leaflet-control-zoom a {
+    background: rgba(16,16,32,0.9) !important; color: #fff !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+  }
+  .leaflet-draw-toolbar a { background-color: rgba(16,16,32,0.9) !important; }
+
+  /* Search bar */
+  .search-box {
+    position: fixed; top: 62px; left: 12px; z-index: 999;
+    background: rgba(16,16,32,0.92); backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+    padding: 8px 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .search-box input {
+    background: none; border: none; color: #fff; font-size: 13px;
+    outline: none; width: 220px;
+  }
+  .search-box input::placeholder { color: #666; }
+
+  /* Info popup */
+  .info-box {
+    position: fixed; bottom: 20px; left: 20px; z-index: 999;
+    background: rgba(16,16,32,0.92); backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+    padding: 12px 16px; max-width: 300px; font-size: 12px;
+    color: #aaa; line-height: 1.5;
+  }
+  .info-box strong { color: #fff; }
+
+  /* Snap indicator */
+  .snap-indicator {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 999; background: rgba(74, 158, 255, 0.9); color: #fff;
+    padding: 6px 14px; border-radius: 20px; font-size: 12px;
+    display: none; pointer-events: none;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .panel { width: 280px; }
+    .panel-toggle { right: 280px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>306-354 Sipples Road, Calvert</h1>
+  <span class="subtitle">Lot 108 CPCH31281 • QLD 4340</span>
+  <span class="coords" id="cursorCoords">-27.6850, 152.4850</span>
+</div>
+
+<div id="map"></div>
+
+<div class="panel" id="sidePanel">
+  <!-- Base Map -->
+  <div class="section">
+    <div class="section-title">Base Map</div>
+    <div class="basemap-row">
+      <button class="basemap-btn active" onclick="setBasemap('street')">Street</button>
+      <button class="basemap-btn" onclick="setBasemap('satellite')">Satellite</button>
+      <button class="basemap-btn" onclick="setBasemap('topo')">Topo</button>
+    </div>
+  </div>
+
+  <!-- QLD Government Overlays -->
+  <div class="section">
+    <div class="section-title">QLD Government Layers</div>
+    <div id="govLayers"></div>
+  </div>
+
+  <!-- Drawing Tools -->
+  <div class="section">
+    <div class="section-title">Site Plan Elements</div>
+    <div id="drawTools"></div>
+  </div>
+
+  <!-- Placed Elements -->
+  <div class="section">
+    <div class="section-title">Placed Elements</div>
+    <div id="elementsList">
+      <div style="color: #666; font-size: 12px; font-style: italic;">No elements placed yet. Use the drawing tools above to add house plan elements.</div>
+    </div>
+  </div>
+
+  <!-- Measurements -->
+  <div class="section">
+    <div class="section-title">Measurement Tools</div>
+    <button class="draw-btn" id="measureDistBtn" onclick="toggleMeasure('distance')">
+      <span class="draw-icon">📏</span> Measure Distance
+    </button>
+    <button class="draw-btn" id="measureAreaBtn" onclick="toggleMeasure('area')">
+      <span class="draw-icon">📐</span> Measure Area
+    </button>
+    <div id="measureResult" style="padding: 8px 0; font-size: 12px; color: #888; font-family: monospace;"></div>
+  </div>
+</div>
+
+<button class="panel-toggle" id="panelToggle" onclick="togglePanel()">◀</button>
+
+<div class="info-box" id="infoBox">
+  <strong>Tip:</strong> Toggle QLD government data layers on the right panel. Click map elements for details. Use drawing tools to place house plan components.
+</div>
+
+<div class="snap-indicator" id="snapIndicator">Snap to grid enabled</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/esri-leaflet/3.0.12/esri-leaflet.min.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+// ============================
+// LOCAL STORAGE HELPERS
+// ============================
+const STORAGE_KEY = 'blockmap-settings';
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+
+function saveSettings(partial) {
+  try {
+    const current = loadSettings();
+    Object.assign(current, partial);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+  } catch (e) {}
+}
+
+const savedSettings = loadSettings();
+
+// ============================
+// MAP INITIALIZATION
+// ============================
+const BLOCK_CENTER = [-27.671668, 152.494575];
+const BLOCK_ZOOM = 17;
+
+const map = L.map('map', {
+  center: BLOCK_CENTER,
+  zoom: BLOCK_ZOOM,
+  zoomControl: true,
+  attributionControl: true
+});
+
+// Offset map center to account for side panel
+map.panBy([160, 0], { animate: false });
+
+// Update cursor coordinates
+map.on('mousemove', function(e) {
+  document.getElementById('cursorCoords').textContent =
+    e.latlng.lat.toFixed(6) + ', ' + e.latlng.lng.toFixed(6);
+});
+
+// ============================
+// BASE MAPS
+// ============================
+const basemaps = {
+  street: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+    maxZoom: 20,
+    subdomains: 'abcd'
+  }),
+  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+    maxZoom: 20
+  }),
+  topo: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '&copy; Esri, HERE, Garmin, USGS',
+    maxZoom: 18
+  })
+};
+
+let currentBasemap = savedSettings.basemap || 'street';
+basemaps[currentBasemap].addTo(map);
+
+// Highlight the correct basemap button on load
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.basemap-btn').forEach(b => {
+    b.classList.remove('active');
+    if (b.textContent.trim().toLowerCase() === currentBasemap) b.classList.add('active');
+  });
+});
+
+function setBasemap(name) {
+  map.removeLayer(basemaps[currentBasemap]);
+  basemaps[name].addTo(map);
+  currentBasemap = name;
+  saveSettings({ basemap: name });
+  document.querySelectorAll('.basemap-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+// ============================
+// QLD GOVERNMENT OVERLAY LAYERS
+// ============================
+const govLayerDefs = [
+  {
+    id: 'cadastre',
+    name: 'Cadastral Parcels',
+    desc: 'Property boundaries (DCDB)',
+    color: '#4a9eff',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/PlanningCadastre/LandParcelPropertyFramework/MapServer',
+    type: 'dynamic',
+    layers: [4],
+    opacity: 0.7,
+    active: true
+  },
+  {
+    id: 'vegetation',
+    name: 'Vegetation Management',
+    desc: 'Regulated vegetation map (RVM)',
+    color: '#22cc66',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Biota/VegetationManagement/MapServer',
+    type: 'dynamic',
+    layers: [101, 103],
+    opacity: 0.5,
+    active: false
+  },
+  {
+    id: 'regional_eco',
+    name: 'Regional Ecosystems',
+    desc: 'Biodiversity & vegetation groups',
+    color: '#33aa55',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Biota/RegionalEcosystemMapping/MapServer',
+    type: 'dynamic',
+    layers: [0],
+    opacity: 0.45,
+    active: false
+  },
+  {
+    id: 'fire_history',
+    name: 'Fire History',
+    desc: 'QPWS fire & treatment history',
+    color: '#ff5533',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Environment/ParksFireHistory/MapServer',
+    type: 'dynamic',
+    layers: [],
+    opacity: 0.5,
+    active: false
+  },
+  {
+    id: 'contours',
+    name: 'Contours (10m)',
+    desc: 'Elevation contour lines',
+    color: '#cc8844',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
+    type: 'dynamic',
+    layers: [10],
+    opacity: 0.6,
+    active: false
+  },
+  {
+    id: 'landuse',
+    name: 'Land Use',
+    desc: 'Current land use classification',
+    color: '#aa77dd',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/PlanningCadastre/LandUse/MapServer',
+    type: 'dynamic',
+    layers: [],
+    opacity: 0.45,
+    active: false
+  },
+  {
+    id: 'env_sensitive',
+    name: 'Environmentally Sensitive Areas',
+    desc: 'Category A sensitive areas',
+    color: '#ffaa22',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Environment/EnvironmentallySensitiveAreasCategoryA/MapServer',
+    type: 'dynamic',
+    layers: [],
+    opacity: 0.45,
+    active: false
+  },
+  {
+    id: 'soils',
+    name: 'Soils & Land Resources',
+    desc: 'Soil types and land suitability',
+    color: '#997744',
+    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/GeoscientificInformation/SoilsAndLandResource/MapServer',
+    type: 'dynamic',
+    layers: [],
+    opacity: 0.45,
+    active: false
+  }
+];
+
+const govLayerInstances = {};
+
+// Restore saved layer states (active/opacity) from localStorage
+const savedLayers = savedSettings.layers || {};
+govLayerDefs.forEach(def => {
+  if (savedLayers[def.id] !== undefined) {
+    def.active = savedLayers[def.id].active;
+    if (savedLayers[def.id].opacity !== undefined) def.opacity = savedLayers[def.id].opacity;
+  }
+});
+
+function createGovLayer(def) {
+  const opts = {
+    url: def.url,
+    opacity: def.opacity,
+    maxZoom: 20,
+    pane: 'overlayPane'
+  };
+  if (def.layers && def.layers.length > 0) {
+    opts.layers = def.layers;
+  }
+  return L.esri.dynamicMapLayer(opts);
+}
+
+function saveLayerStates() {
+  const states = {};
+  govLayerDefs.forEach(def => {
+    states[def.id] = {
+      active: !!(govLayerInstances[def.id] && map.hasLayer(govLayerInstances[def.id])),
+      opacity: def.opacity
+    };
+  });
+  saveSettings({ layers: states });
+}
+
+// Build layer toggles UI
+const govLayersContainer = document.getElementById('govLayers');
+govLayerDefs.forEach(def => {
+  const wrapper = document.createElement('div');
+
+  const item = document.createElement('div');
+  item.className = 'layer-item';
+  item.innerHTML = `
+    <div class="layer-toggle ${def.active ? 'active' : ''}" id="toggle-${def.id}" style="--color: ${def.color}"></div>
+    <div>
+      <div class="layer-label">${def.name}</div>
+      <div class="layer-desc">${def.desc}</div>
+    </div>
+  `;
+  item.onclick = () => toggleGovLayer(def.id);
+
+  const opacityRow = document.createElement('div');
+  opacityRow.className = 'opacity-row';
+  opacityRow.innerHTML = `
+    <label>Opacity</label>
+    <input type="range" min="0" max="100" value="${def.opacity * 100}" oninput="setLayerOpacity('${def.id}', this.value / 100)" />
+  `;
+
+  wrapper.appendChild(item);
+  wrapper.appendChild(opacityRow);
+  govLayersContainer.appendChild(wrapper);
+
+  if (def.active) {
+    govLayerInstances[def.id] = createGovLayer(def);
+    govLayerInstances[def.id].addTo(map);
+  }
+});
+
+function toggleGovLayer(id) {
+  const def = govLayerDefs.find(d => d.id === id);
+  const toggle = document.getElementById('toggle-' + id);
+
+  if (govLayerInstances[id] && map.hasLayer(govLayerInstances[id])) {
+    map.removeLayer(govLayerInstances[id]);
+    delete govLayerInstances[id];
+    toggle.classList.remove('active');
+  } else {
+    govLayerInstances[id] = createGovLayer(def);
+    govLayerInstances[id].addTo(map);
+    toggle.classList.add('active');
+  }
+  saveLayerStates();
+}
+
+function setLayerOpacity(id, opacity) {
+  if (govLayerInstances[id]) {
+    govLayerInstances[id].setOpacity(opacity);
+  }
+  const def = govLayerDefs.find(d => d.id === id);
+  if (def) def.opacity = opacity;
+  saveLayerStates();
+}
+
+// ============================
+// SITE PLAN DRAWING TOOLS
+// ============================
+const drawnItems = new L.FeatureGroup();
+map.addLayer(drawnItems);
+
+const sitePlanElements = [
+  { id: 'house', name: 'House Footprint', icon: '🏠', color: '#4a9eff', fillColor: '#4a9eff', type: 'polygon' },
+  { id: 'garage', name: 'Garage / Shed', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'polygon' },
+  { id: 'driveway', name: 'Driveway / Access', icon: '🛤️', color: '#999999', fillColor: '#888888', type: 'polygon' },
+  { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'polygon' },
+  { id: 'watertank', name: 'Water Tank', icon: '💧', color: '#2299dd', fillColor: '#2299dd', type: 'circle' },
+  { id: 'fence', name: 'Fencing', icon: '🔲', color: '#ddaa33', fillColor: 'transparent', type: 'polyline' },
+  { id: 'garden', name: 'Garden / Landscaping', icon: '🌿', color: '#44bb55', fillColor: '#44bb55', type: 'polygon' },
+  { id: 'pool', name: 'Pool', icon: '🏊', color: '#33bbdd', fillColor: '#33bbdd', type: 'polygon' },
+  { id: 'setback', name: 'Setback Line', icon: '📐', color: '#ff4466', fillColor: 'transparent', type: 'polyline' },
+  { id: 'dam', name: 'Dam / Pond', icon: '🌊', color: '#2266aa', fillColor: '#2266aa', type: 'polygon' },
+  { id: 'custom', name: 'Custom Area', icon: '✏️', color: '#cc66ff', fillColor: '#cc66ff', type: 'polygon' }
+];
+
+let activeDrawTool = null;
+let drawHandler = null;
+let placedElements = [];
+
+const drawToolsContainer = document.getElementById('drawTools');
+sitePlanElements.forEach(el => {
+  const btn = document.createElement('button');
+  btn.className = 'draw-btn';
+  btn.id = 'drawbtn-' + el.id;
+  btn.innerHTML = `<span class="draw-icon">${el.icon}</span> ${el.name}`;
+  btn.onclick = () => startDrawing(el);
+  drawToolsContainer.appendChild(btn);
+});
+
+function startDrawing(el) {
+  if (!L.Draw) { alert('Drawing tools are still loading. Please try again in a moment.'); return; }
+
+  // Cancel previous
+  if (drawHandler) {
+    drawHandler.disable();
+    document.querySelectorAll('.draw-btn').forEach(b => b.classList.remove('active'));
+  }
+
+  if (activeDrawTool === el.id) {
+    activeDrawTool = null;
+    drawHandler = null;
+    return;
+  }
+
+  activeDrawTool = el.id;
+  document.getElementById('drawbtn-' + el.id).classList.add('active');
+
+  const shapeOpts = {
+    color: el.color,
+    fillColor: el.fillColor,
+    fillOpacity: 0.3,
+    weight: 2
+  };
+
+  if (el.type === 'polygon') {
+    drawHandler = new L.Draw.Polygon(map, { shapeOptions: shapeOpts });
+  } else if (el.type === 'polyline') {
+    shapeOpts.fill = false;
+    drawHandler = new L.Draw.Polyline(map, { shapeOptions: shapeOpts });
+  } else if (el.type === 'circle') {
+    drawHandler = new L.Draw.Circle(map, { shapeOptions: shapeOpts });
+  }
+
+  drawHandler.enable();
+}
+
+map.on(L.Draw && L.Draw.Event ? L.Draw.Event.CREATED : 'draw:created', function(e) {
+  const layer = e.layer;
+  const el = sitePlanElements.find(s => s.id === activeDrawTool) || sitePlanElements[sitePlanElements.length - 1];
+
+  layer.elementType = el.id;
+  layer.elementName = el.name;
+  layer.elementColor = el.color;
+
+  // Calculate area or length
+  let measurement = '';
+  if (e.layerType === 'polygon') {
+    const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]);
+    if (area > 10000) {
+      measurement = (area / 10000).toFixed(2) + ' ha';
+    } else {
+      measurement = area.toFixed(1) + ' m²';
+    }
+    layer.measurementValue = measurement;
+  } else if (e.layerType === 'polyline') {
+    let dist = 0;
+    const latlngs = layer.getLatLngs();
+    for (let i = 1; i < latlngs.length; i++) {
+      dist += latlngs[i-1].distanceTo(latlngs[i]);
+    }
+    measurement = dist.toFixed(1) + ' m';
+    layer.measurementValue = measurement;
+  } else if (e.layerType === 'circle') {
+    const r = layer.getRadius();
+    measurement = 'r=' + r.toFixed(1) + 'm, ' + (Math.PI * r * r).toFixed(1) + ' m²';
+    layer.measurementValue = measurement;
+  }
+
+  // Popup
+  layer.bindPopup(`
+    <div style="font-family: sans-serif; font-size: 13px;">
+      <strong>${el.icon} ${el.name}</strong><br>
+      ${measurement ? '<span style="color: #666;">' + measurement + '</span>' : ''}
+    </div>
+  `);
+
+  // Tooltip
+  if (measurement) {
+    layer.bindTooltip(el.name + ' — ' + measurement, {
+      permanent: false,
+      className: 'measurement-tooltip'
+    });
+  }
+
+  drawnItems.addLayer(layer);
+
+  const elemId = 'elem-' + Date.now();
+  layer.elemId = elemId;
+  placedElements.push({ id: elemId, layer, type: el, measurement });
+
+  updateElementsList();
+
+  // Reset draw tool
+  activeDrawTool = null;
+  drawHandler = null;
+  document.querySelectorAll('.draw-btn').forEach(b => b.classList.remove('active'));
+});
+
+function updateElementsList() {
+  const container = document.getElementById('elementsList');
+  if (placedElements.length === 0) {
+    container.innerHTML = '<div style="color: #666; font-size: 12px; font-style: italic;">No elements placed yet.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  placedElements.forEach(elem => {
+    const item = document.createElement('div');
+    item.className = 'element-item';
+    item.innerHTML = `
+      <div class="color-dot" style="background: ${elem.type.color}"></div>
+      <span class="name">${elem.type.icon} ${elem.type.name}</span>
+      <span class="area">${elem.measurement || ''}</span>
+      <button class="delete-btn" onclick="removeElement('${elem.id}')" title="Remove">×</button>
+    `;
+    item.onmouseenter = () => {
+      elem.layer.setStyle && elem.layer.setStyle({ weight: 4, fillOpacity: 0.5 });
+    };
+    item.onmouseleave = () => {
+      elem.layer.setStyle && elem.layer.setStyle({ weight: 2, fillOpacity: 0.3 });
+    };
+    item.onclick = (e) => {
+      if (e.target.classList.contains('delete-btn')) return;
+      if (elem.layer.getBounds) map.fitBounds(elem.layer.getBounds(), { padding: [60, 60] });
+      else if (elem.layer.getLatLng) map.setView(elem.layer.getLatLng(), 18);
+    };
+    container.appendChild(item);
+  });
+}
+
+function removeElement(id) {
+  const idx = placedElements.findIndex(e => e.id === id);
+  if (idx >= 0) {
+    drawnItems.removeLayer(placedElements[idx].layer);
+    placedElements.splice(idx, 1);
+    updateElementsList();
+  }
+}
+
+// ============================
+// MEASUREMENT TOOLS
+// ============================
+let measureMode = null;
+let measureHandler = null;
+
+function toggleMeasure(mode) {
+  if (!L.Draw) { alert('Measurement tools are still loading. Please try again in a moment.'); return; }
+
+  if (measureHandler) {
+    measureHandler.disable();
+    measureHandler = null;
+  }
+
+  document.getElementById('measureDistBtn').classList.remove('active');
+  document.getElementById('measureAreaBtn').classList.remove('active');
+
+  if (measureMode === mode) {
+    measureMode = null;
+    return;
+  }
+
+  measureMode = mode;
+
+  if (mode === 'distance') {
+    document.getElementById('measureDistBtn').classList.add('active');
+    measureHandler = new L.Draw.Polyline(map, {
+      shapeOptions: { color: '#fff', weight: 2, dashArray: '5, 10', fillOpacity: 0 }
+    });
+  } else {
+    document.getElementById('measureAreaBtn').classList.add('active');
+    measureHandler = new L.Draw.Polygon(map, {
+      shapeOptions: { color: '#fff', weight: 2, dashArray: '5, 10', fillColor: '#fff', fillOpacity: 0.1 }
+    });
+  }
+
+  measureHandler.enable();
+
+  map.once(L.Draw && L.Draw.Event ? L.Draw.Event.CREATED : 'draw:created', function(e) {
+    const layer = e.layer;
+    let result = '';
+
+    if (e.layerType === 'polyline') {
+      let dist = 0;
+      const latlngs = layer.getLatLngs();
+      for (let i = 1; i < latlngs.length; i++) {
+        dist += latlngs[i-1].distanceTo(latlngs[i]);
+      }
+      result = 'Distance: ' + dist.toFixed(1) + ' m (' + (dist / 1000).toFixed(3) + ' km)';
+    } else if (e.layerType === 'polygon') {
+      const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]);
+      result = 'Area: ' + area.toFixed(1) + ' m² (' + (area / 10000).toFixed(4) + ' ha)';
+    }
+
+    document.getElementById('measureResult').textContent = result;
+
+    layer.setStyle({ opacity: 0.4 });
+    layer.bindTooltip(result, { permanent: true, className: 'measurement-tooltip' });
+    drawnItems.addLayer(layer);
+
+    measureMode = null;
+    measureHandler = null;
+    document.getElementById('measureDistBtn').classList.remove('active');
+    document.getElementById('measureAreaBtn').classList.remove('active');
+  });
+}
+
+// ============================
+// PANEL TOGGLE
+// ============================
+function togglePanel() {
+  const panel = document.getElementById('sidePanel');
+  const toggle = document.getElementById('panelToggle');
+  panel.classList.toggle('collapsed');
+  toggle.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
+}
+
+// ============================
+// APPROXIMATE BLOCK BOUNDARY
+// ============================
+// Actual lot boundary from QLD DCDB cadastral data (Lot 108 on CH31281)
+const lotBoundary = L.polygon([
+  [-27.670233837223403, 152.49741853],
+  [-27.672868437223382, 152.49697031799997],
+  [-27.67304789922333, 152.49693898099997],
+  [-27.673818759223366, 152.49680434200002],
+  [-27.673111512223333, 152.49173203099997],
+  [-27.66951776222341, 152.49237267700005],
+  [-27.670233837223403, 152.49741853]
+], {
+  color: '#ffaa00',
+  fillColor: '#ffaa00',
+  fillOpacity: 0.08,
+  weight: 3,
+  interactive: true
+}).addTo(map);
+
+lotBoundary.bindPopup(`
+  <div style="font-family: sans-serif; font-size: 13px;">
+    <strong>Lot 108 on CH31281</strong><br>
+    <span style="color: #666;">306-354 Sipples Road, Calvert QLD 4340</span><br>
+    <span style="color: #666;">Area: 202,340 m² (20.23 ha / ~50 acres)</span>
+  </div>
+`);
+
+lotBoundary.bindTooltip('Lot 108 CH31281 — 20.23 ha', {
+  permanent: true,
+  direction: 'center',
+  className: 'measurement-tooltip'
+});
+
+// ============================
+// DISMISS INFO BOX
+// ============================
+setTimeout(() => {
+  const infoBox = document.getElementById('infoBox');
+  if (infoBox) infoBox.style.transition = 'opacity 0.5s';
+  setTimeout(() => { if (infoBox) infoBox.style.opacity = '0'; }, 8000);
+  setTimeout(() => { if (infoBox) infoBox.remove(); }, 8500);
+}, 1000);
+
+// ============================
+// EXPORT / SAVE FUNCTIONALITY
+// ============================
+// Store site plan data in a format that can be saved/loaded
+function exportSitePlan() {
+  const data = placedElements.map(elem => ({
+    type: elem.type.id,
+    name: elem.type.name,
+    measurement: elem.measurement,
+    latlngs: elem.layer.getLatLngs ? JSON.stringify(elem.layer.getLatLngs()) : null,
+    latlng: elem.layer.getLatLng ? JSON.stringify(elem.layer.getLatLng()) : null,
+    radius: elem.layer.getRadius ? elem.layer.getRadius() : null
+  }));
+  return JSON.stringify(data, null, 2);
+}
+
+</script>
+</body>
+</html>
