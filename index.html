@@ -455,6 +455,8 @@ function tileUrlToLocal(url, coords) {
       return `tiles/satellite/${coords.z}/${coords.x}/${coords.y}.jpg`;
     } else if (url.includes('arcgisonline.com/ArcGIS/rest/services/World_Topo')) {
       return `tiles/topo/${coords.z}/${coords.x}/${coords.y}.jpg`;
+    } else if (url.includes('spatial-img.information.qld.gov.au')) {
+      return `tiles/qldaerial/${coords.z}/${coords.x}/${coords.y}.jpg`;
     }
   } catch (e) {}
   return null;
