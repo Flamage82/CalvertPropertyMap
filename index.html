@@ -157,6 +157,13 @@
     display: none; pointer-events: none;
   }
 
+  /* Contour elevation labels */
+  .contour-label {
+    background: none !important; border: none !important; box-shadow: none !important;
+    font-size: 9px; font-weight: 600; color: #884422; text-shadow: 0 0 3px rgba(255,255,255,0.8);
+    padding: 0 !important; white-space: nowrap;
+  }
+
   /* Responsive */
   @media (max-width: 768px) {
     .panel { width: 280px; }
@@ -245,7 +252,7 @@
 <div class="snap-indicator" id="snapIndicator">Snap to grid enabled</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/esri-leaflet/3.0.12/esri-leaflet.min.js"></script>
+<!-- Esri Leaflet removed — all layers now local GeoJSON -->
 <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
 <script>
 // ============================
@@ -499,9 +506,9 @@ const govLayerDefs = [
     name: 'Cadastral Parcels',
     desc: 'Property boundaries (DCDB)',
     color: '#4a9eff',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/PlanningCadastre/LandParcelPropertyFramework/MapServer',
-    type: 'dynamic',
-    layers: [4],
+    url: 'overlays/cadastral_overlay.geojson',
+    type: 'geojson',
+    layers: [],
     opacity: 0.7,
     active: true
   },
@@ -510,9 +517,9 @@ const govLayerDefs = [
     name: 'Vegetation Management',
     desc: 'Regulated vegetation map (RVM)',
     color: '#22cc66',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Biota/VegetationManagement/MapServer',
-    type: 'dynamic',
-    layers: [101, 103],
+    url: 'overlays/vegetation_overlay.geojson',
+    type: 'geojson',
+    layers: [],
     opacity: 0.5,
     active: false
   },
@@ -521,9 +528,9 @@ const govLayerDefs = [
     name: 'Regional Ecosystems',
     desc: 'Biodiversity & vegetation groups',
     color: '#33aa55',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Biota/RegionalEcosystemMapping/MapServer',
-    type: 'dynamic',
-    layers: [0],
+    url: 'overlays/regional_eco_overlay.geojson',
+    type: 'geojson',
+    layers: [],
     opacity: 0.45,
     active: false
   },
@@ -598,9 +605,9 @@ const govLayerDefs = [
     name: 'Contours LiDAR (1m)',
     desc: 'High-detail 1m LiDAR contours',
     color: '#cc8844',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Elevation/Contours/MapServer',
-    type: 'dynamic',
-    layers: [30],
+    url: 'overlays/contours_1m_overlay.geojson',
+    type: 'geojson',
+    layers: [],
     opacity: 0.7,
     active: false
   },
@@ -609,8 +616,8 @@ const govLayerDefs = [
     name: 'Land Use',
     desc: 'Current land use classification',
     color: '#aa77dd',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/PlanningCadastre/LandUse/MapServer',
-    type: 'dynamic',
+    url: 'overlays/landuse_overlay.geojson',
+    type: 'geojson',
     layers: [],
     opacity: 0.45,
     active: false
@@ -620,8 +627,8 @@ const govLayerDefs = [
     name: 'Soils & Land Resources',
     desc: 'Soil types and land suitability',
     color: '#997744',
-    url: 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/GeoscientificInformation/SoilsAndLandResource/MapServer',
-    type: 'dynamic',
+    url: 'overlays/soils_overlay.geojson',
+    type: 'geojson',
     layers: [],
     opacity: 0.45,
     active: false
@@ -686,36 +693,163 @@ function getOverlayStyle(feature, def, opacityOverride) {
   if (def.id === 'icc_catchments' && sub.includes('Supply Buffer')) { color = '#0055aa'; fillOpacity = baseOpacity * 0.15; }
   else if (def.id === 'icc_catchments' && sub.includes('Catchment Area')) { color = '#1177bb'; fillOpacity = baseOpacity * 0.2; }
 
+  // --- QLD Government layers ---
+
+  // Cadastral Parcels: blue boundary lines, very light fill
+  if (def.id === 'cadastre') {
+    color = '#4a9eff'; weight = 1.5; fillOpacity = baseOpacity * 0.08;
+  }
+
+  // Vegetation Management: color by RVM category
+  if (def.id === 'vegetation') {
+    const rvm = (feature.properties.rvm_cat || '').toUpperCase();
+    if (rvm.includes('ENDANGERED')) { color = '#cc0033'; fillOpacity = baseOpacity * 0.5; }
+    else if (rvm.includes('OF CONCERN') || rvm === 'B') { color = '#ff8800'; fillOpacity = baseOpacity * 0.4; }
+    else if (rvm.includes('LEAST CONCERN') || rvm === 'C') { color = '#22cc66'; fillOpacity = baseOpacity * 0.3; }
+    else { color = '#22cc66'; fillOpacity = baseOpacity * 0.35; }
+  }
+
+  // Regional Ecosystems: color by VM class / biodiversity status
+  if (def.id === 'regional_eco') {
+    const vm = (feature.properties.vm_class || '').toLowerCase();
+    const bd = (feature.properties.bd_status || '').toLowerCase();
+    if (bd.includes('endangered') || vm.includes('endangered')) { color = '#cc0033'; fillOpacity = baseOpacity * 0.5; }
+    else if (bd.includes('of concern') || vm.includes('of concern')) { color = '#ff8800'; fillOpacity = baseOpacity * 0.4; }
+    else if (bd.includes('no concern') || vm.includes('least concern')) { color = '#33aa55'; fillOpacity = baseOpacity * 0.3; }
+    else { color = '#55bb66'; fillOpacity = baseOpacity * 0.3; }
+  }
+
+  // Contours (LineString): color by index vs intermediate, weight by type
+  if (def.id === 'contours_1m') {
+    const ft = feature.properties.feature_type || '';
+    const elev = feature.properties.elevation_m || 0;
+    if (ft === 'Index Contour') {
+      color = '#bb6622'; weight = 2; fillOpacity = 0;
+    } else {
+      color = '#cc884488'; weight = 0.8; fillOpacity = 0;
+    }
+    // Darker at higher elevations
+    if (elev >= 100) { color = ft === 'Index Contour' ? '#993300' : '#aa6633'; }
+    return { color: color, weight: weight, opacity: baseOpacity, fill: false };
+  }
+
+  // Land Use: color by primary classification
+  if (def.id === 'landuse') {
+    const sec = (feature.properties.secondary || '').toLowerCase();
+    const code = feature.properties.qlump_code || '';
+    if (sec.includes('cropping') || sec.includes('horticulture')) { color = '#ddaa22'; fillOpacity = baseOpacity * 0.35; }
+    else if (sec.includes('grazing')) { color = '#88bb44'; fillOpacity = baseOpacity * 0.3; }
+    else if (sec.includes('forest') || sec.includes('plantation')) { color = '#336633'; fillOpacity = baseOpacity * 0.35; }
+    else if (sec.includes('nature') || sec.includes('conservation')) { color = '#228844'; fillOpacity = baseOpacity * 0.3; }
+    else if (sec.includes('residential') || sec.includes('urban')) { color = '#cc6688'; fillOpacity = baseOpacity * 0.35; }
+    else if (sec.includes('water') || sec.includes('lake') || sec.includes('reservoir')) { color = '#3388cc'; fillOpacity = baseOpacity * 0.35; }
+    else { color = '#aa77dd'; fillOpacity = baseOpacity * 0.3; }
+  }
+
+  // Soils: color by agricultural land class
+  if (def.id === 'soils') {
+    const alc = (feature.properties.ag_land_class || '').toUpperCase();
+    if (alc === 'A1') { color = '#228833'; fillOpacity = baseOpacity * 0.45; }       // Best cropland
+    else if (alc === 'A2') { color = '#44aa44'; fillOpacity = baseOpacity * 0.4; }    // Cropland limited
+    else if (alc === 'B') { color = '#88bb44'; fillOpacity = baseOpacity * 0.35; }    // Pasture land
+    else if (alc === 'C1') { color = '#bbaa44'; fillOpacity = baseOpacity * 0.3; }    // Pasture limited
+    else if (alc === 'C2') { color = '#cc9944'; fillOpacity = baseOpacity * 0.3; }    // Pasture very limited
+    else if (alc === 'C3') { color = '#997744'; fillOpacity = baseOpacity * 0.25; }   // Grazing only
+    else if (alc === 'D') { color = '#886644'; fillOpacity = baseOpacity * 0.2; }     // Non-agricultural
+    else { color = '#997744'; fillOpacity = baseOpacity * 0.25; }
+  }
+
   return { color: color, fillColor: color, fillOpacity: fillOpacity, weight: weight, opacity: baseOpacity };
 }
 
+function getOverlayPopup(feature, def) {
+  const p = feature.properties;
+  const sub = p._sublayer || '';
+
+  // Cadastral Parcels
+  if (def.id === 'cadastre') {
+    let html = '<strong>Cadastral Parcel</strong>';
+    if (p.lotplan) html += '<br>Lot/Plan: <b>' + p.lotplan + '</b>';
+    if (p.tenure) html += '<br>Tenure: ' + p.tenure;
+    if (p.lot_area) html += '<br>Area: ' + (parseFloat(p.lot_area) >= 10000 ? (parseFloat(p.lot_area)/10000).toFixed(2) + ' ha' : parseFloat(p.lot_area).toFixed(0) + ' m²');
+    if (p.locality) html += '<br>Locality: ' + p.locality;
+    if (p.feat_name) html += '<br>Name: ' + p.feat_name;
+    return html;
+  }
+
+  // Vegetation Management
+  if (def.id === 'vegetation') {
+    let html = '<strong>Vegetation Management</strong>';
+    if (p.rvm_cat) html += '<br>RVM Category: <b>' + p.rvm_cat + '</b>';
+    if (p.map_no) html += '<br>Map No: ' + p.map_no;
+    return html;
+  }
+
+  // Regional Ecosystems
+  if (def.id === 'regional_eco') {
+    let html = '<strong>Regional Ecosystem</strong>';
+    if (p.re_label) html += '<br>RE: <b>' + p.re_label + '</b>';
+    else if (p.re1) html += '<br>RE: <b>' + p.re1 + '</b>' + (p.pc1 ? ' (' + p.pc1 + '%)' : '');
+    if (p.re2) html += '<br>RE2: ' + p.re2 + (p.pc2 ? ' (' + p.pc2 + '%)' : '');
+    if (p.vm_class) html += '<br>VM Class: ' + p.vm_class;
+    if (p.bd_status) html += '<br>Biodiversity: ' + p.bd_status;
+    if (p.landzone) html += '<br>Landzone: ' + p.landzone;
+    return html;
+  }
+
+  // Contours
+  if (def.id === 'contours_1m') {
+    let html = '<strong>Contour</strong>';
+    if (p.elevation_m !== undefined) html += '<br>Elevation: <b>' + p.elevation_m + 'm</b>';
+    if (p.feature_type) html += '<br>Type: ' + p.feature_type;
+    return html;
+  }
+
+  // Land Use
+  if (def.id === 'landuse') {
+    let html = '<strong>Land Use</strong>';
+    if (p.primary_) html += '<br>Primary: <b>' + p.primary_ + '</b>';
+    if (p.secondary) html += '<br>Secondary: ' + p.secondary;
+    if (p.tertiary) html += '<br>Tertiary: ' + p.tertiary;
+    if (p.commodity) html += '<br>Commodity: ' + p.commodity;
+    if (p.qlump_code) html += '<br>QLUMP: ' + p.qlump_code;
+    if (p.year) html += '<br>Year: ' + p.year;
+    return html;
+  }
+
+  // Soils
+  if (def.id === 'soils') {
+    let html = '<strong>Soils & Land Resources</strong>';
+    if (p.ag_land_class) html += '<br>ALC: <b>' + p.ag_land_class + '</b>';
+    if (p.ag_land_class_meaning) html += '<br>' + p.ag_land_class_meaning;
+    if (p.project_code) html += '<br>Survey: ' + p.project_code;
+    return html;
+  }
+
+  // Default: ICC overlays use _sublayer
+  return '<strong>' + def.name + '</strong><br>' + (sub || 'Unknown');
+}
+
 function createGovLayer(def) {
-  if (def.type === 'geojson') {
-    // Load local GeoJSON file — returns a placeholder layer, data loaded async
-    const layer = L.geoJSON(null, {
-      pane: 'overlayPane',
-      style: function(feature) { return getOverlayStyle(feature, def); },
-      onEachFeature: function(feature, layer) {
-        const sub = feature.properties._sublayer || 'Unknown';
-        layer.bindPopup('<strong>' + def.name + '</strong><br>' + sub);
+  // All layers are local GeoJSON
+  const layer = L.geoJSON(null, {
+    pane: 'overlayPane',
+    style: function(feature) { return getOverlayStyle(feature, def); },
+    onEachFeature: function(feature, lyr) {
+      lyr.bindPopup(getOverlayPopup(feature, def));
+      // Contour index lines get permanent elevation labels
+      if (def.id === 'contours_1m' && feature.properties.feature_type === 'Index Contour' && feature.properties.elevation_m) {
+        lyr.bindTooltip(feature.properties.elevation_m + 'm', {
+          permanent: true, direction: 'center', className: 'contour-label'
+        });
       }
-    });
-    // Async load the GeoJSON file
-    fetch(def.url).then(r => r.json()).then(data => {
-      layer.addData(data);
-    }).catch(e => console.warn('Failed to load overlay:', def.url, e));
-    return layer;
-  }
-  const opts = {
-    url: def.url,
-    opacity: def.opacity,
-    maxZoom: 20,
-    pane: 'overlayPane'
-  };
-  if (def.layers && def.layers.length > 0) {
-    opts.layers = def.layers;
-  }
-  return L.esri.dynamicMapLayer(opts);
+    }
+  });
+  // Async load the GeoJSON file
+  fetch(def.url).then(r => r.json()).then(data => {
+    layer.addData(data);
+  }).catch(e => console.warn('Failed to load overlay:', def.url, e));
+  return layer;
 }
 
 function saveLayerStates() {
