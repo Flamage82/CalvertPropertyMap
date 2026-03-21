@@ -117,6 +117,19 @@
     border-radius: 4px; font-size: 12px; font-family: monospace;
     white-space: nowrap; border: 1px solid rgba(255,255,255,0.2);
   }
+  .lot-label {
+    background: none !important; border: none !important;
+    width: 0 !important; height: 0 !important;
+    overflow: visible !important; pointer-events: none;
+  }
+  .lot-label-text {
+    display: inline-block; width: max-content;
+    background: rgba(0,0,0,0.8); color: #fff; padding: 4px 8px;
+    border-radius: 4px; font-size: 12px; font-family: monospace;
+    white-space: nowrap; border: 1px solid rgba(255,255,255,0.2);
+    transform: translateX(-50%);
+    margin-top: 4px;
+  }
 
   /* Leaflet overrides */
   .leaflet-control-zoom { border: none !important; }
@@ -148,6 +161,25 @@
     color: #aaa; line-height: 1.5;
   }
   .info-box strong { color: #fff; }
+
+  /* Fixed feature info panel (bottom-left) */
+  .feature-info-panel {
+    position: fixed; bottom: 20px; left: 20px; z-index: 1000;
+    background: rgba(16,16,32,0.92); backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 10px;
+    padding: 10px 14px; max-width: 280px; font-size: 12px;
+    color: #ccc; line-height: 1.6;
+    pointer-events: auto;
+    transition: opacity 0.2s;
+  }
+  .feature-info-panel strong { color: #fff; }
+  .feature-info-panel b { color: #e0e0e0; }
+  .feature-info-panel .close-btn {
+    position: absolute; top: 4px; right: 8px;
+    background: none; border: none; color: #888; cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 2px 4px;
+  }
+  .feature-info-panel .close-btn:hover { color: #fff; }
 
   /* Snap indicator */
   .snap-indicator {
@@ -311,6 +343,11 @@
 </div>
 
 <button class="panel-toggle" id="panelToggle" onclick="togglePanel()">◀</button>
+
+<div class="feature-info-panel" id="featureInfoPanel" style="display:none;">
+  <button class="close-btn" onclick="hideFeatureInfo()">✕</button>
+  <div id="featureInfoContent"></div>
+</div>
 
 <div class="info-box" id="infoBox">
   <strong>Tip:</strong> Toggle QLD government data layers on the right panel. Click map elements for details. Use drawing tools to place house plan components.
@@ -1037,7 +1074,9 @@ function createGovLayer(def) {
     pane: 'overlayPane',
     style: function(feature) { return getOverlayStyle(feature, def); },
     onEachFeature: function(feature, lyr) {
-      lyr.bindPopup(getOverlayPopup(feature, def));
+      lyr.on('click', function(e) {
+        showFeatureInfo(getOverlayPopup(feature, def));
+      });
       // Contour index lines get permanent elevation labels
       if (def.id === 'contours_1m' && feature.properties.feature_type === 'Index Contour' && feature.properties.elevation_m) {
         lyr.bindTooltip(feature.properties.elevation_m + 'm', {
@@ -2253,21 +2292,40 @@ const lotBoundary = L.polygon([
   fillColor: '#ffaa00',
   fillOpacity: 0.08,
   weight: 3,
-  interactive: true
+  interactive: false
 }).addTo(map);
 
-lotBoundary.bindPopup(`
-  <div style="font-family: sans-serif; font-size: 13px;">
-    <strong>Lot 108 on CH31281</strong><br>
-    <span style="color: #666;">306-354 Sipples Road, Calvert QLD 4340</span><br>
-    <span style="color: #666;">Area: 202,340 m² (20.23 ha / ~50 acres)</span>
-  </div>
-`);
+// Label below the southern edge of the lot — using DivIcon for precise zoom anchoring
+const lotLabelPos = L.latLng(-27.673675, 152.494220);
+const lotLabelIcon = L.divIcon({
+  className: 'lot-label',
+  html: '<span class="lot-label-text">Lot 108 CH31281 — 20.23 ha</span>',
+  iconSize: null,
+  iconAnchor: [0, 0]
+});
+L.marker(lotLabelPos, { icon: lotLabelIcon, interactive: false }).addTo(map);
 
-lotBoundary.bindTooltip('Lot 108 CH31281 — 20.23 ha', {
-  permanent: true,
-  direction: 'center',
-  className: 'measurement-tooltip'
+// ============================
+// FEATURE INFO PANEL (fixed bottom-left)
+// ============================
+let _featureJustClicked = false;
+function showFeatureInfo(html) {
+  _featureJustClicked = true;
+  const panel = document.getElementById('featureInfoPanel');
+  const content = document.getElementById('featureInfoContent');
+  content.innerHTML = html;
+  panel.style.display = 'block';
+}
+function hideFeatureInfo() {
+  document.getElementById('featureInfoPanel').style.display = 'none';
+}
+// Prevent clicks on the panel from propagating to the map
+const featurePanel = document.getElementById('featureInfoPanel');
+L.DomEvent.disableClickPropagation(featurePanel);
+// Close panel when clicking empty map area
+map.on('click', function() {
+  if (_featureJustClicked) { _featureJustClicked = false; return; }
+  hideFeatureInfo();
 });
 
 // ============================
