@@ -1653,8 +1653,8 @@ function renderLockedDriveway() {
     y: (pt.lat - origin.lat) / conv.lat
   }));
 
-  // Driveway width in metres
-  const driveW = 4;
+  // Driveway width in metres (just wider than a 4WD ute ~1.9m)
+  const driveW = 3;
 
   // Calculate bounds in metre-space with padding for stroke overshoot
   const pad = driveW * 2;
