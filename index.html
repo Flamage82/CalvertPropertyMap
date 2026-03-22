@@ -252,16 +252,22 @@
   .rotation-handle:hover { transform: scale(1.2); }
   .rotation-handle.dragging { cursor: grabbing; transform: scale(1.3); }
 
-  /* Driveway vertex markers */
-  .driveway-vertex {
+  /* Path vertex markers */
+  .driveway-vertex, .path-vertex {
     background: #fff !important; border: 2px solid #999 !important;
     border-radius: 50% !important; cursor: grab;
     box-shadow: 0 1px 3px rgba(0,0,0,0.4);
     transition: transform 0.1s, background 0.1s;
   }
-  .driveway-vertex:hover {
+  .driveway-vertex:hover, .path-vertex:hover {
     background: #ff6666 !important; border-color: #cc3333 !important;
     transform: scale(1.4);
+  }
+  /* Selected endpoint vertex (for bidirectional insertion) */
+  .path-vertex-selected {
+    background: #44ff88 !important; border-color: #22aa55 !important;
+    transform: scale(1.3);
+    box-shadow: 0 0 6px rgba(68,255,136,0.6);
   }
 
   /* Crosshair cursor for drawing modes */
@@ -287,6 +293,16 @@
     opacity: 0;
   }
   .sprite-handle:hover { opacity: 0.15; background: rgba(255,255,255,0.3) !important; border-radius: 50%; }
+  /* Power pole labels */
+  .powerpole-label {
+    background: none !important; border: none !important; box-shadow: none !important;
+    padding: 0 !important; white-space: nowrap;
+  }
+  .powerpole-label span {
+    font-weight: 700; color: #ff6633;
+    text-shadow: 0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.5);
+    /* font-size set dynamically based on zoom */
+  }
 
   /* Contour elevation labels */
   .contour-label {
@@ -651,9 +667,23 @@ const UrlState = {
       }).filter(ll => !isNaN(ll.lat) && !isNaN(ll.lng));
     }
     if (p.has('dw_lock')) state.dwLocked = true;
+    // Generic path elements (powerline, underground_power, water_pipe, sewage_pipe)
+    state.paths = {};
+    ['powerline', 'underground_power', 'water_pipe', 'sewage_pipe'].forEach(id => {
+      const key = 'pt_' + id;
+      if (p.has(key)) {
+        state.paths[id] = {
+          points: p.get(key).split(';').map(pt => {
+            const [lat, lng] = pt.split(',').map(Number);
+            return L.latLng(lat, lng);
+          }).filter(ll => !isNaN(ll.lat) && !isNaN(ll.lng)),
+          locked: p.get(key + '_lock') === '1'
+        };
+      }
+    });
     // Sprite elements (septic, watertank, etc.)
     state.sprites = {};
-    ['septic', 'watertank'].forEach(id => {
+    ['septic', 'watertank', 'powerpole'].forEach(id => {
       const key = 'sp_' + id;
       if (p.has(key)) {
         state.sprites[id] = p.get(key).split(';').map(pt => {
@@ -722,6 +752,14 @@ const UrlState = {
       p.set('dw', drivewayState.points.map(ll => ll.lat.toFixed(6) + ',' + ll.lng.toFixed(6)).join(';'));
       if (drivewayState.locked) p.set('dw_lock', '1');
     }
+    // Generic path elements
+    Object.keys(pathStates).forEach(id => {
+      const ps = pathStates[id];
+      if (ps.points.length > 0) {
+        p.set('pt_' + id, ps.points.map(ll => ll.lat.toFixed(6) + ',' + ll.lng.toFixed(6)).join(';'));
+        if (ps.locked) p.set('pt_' + id + '_lock', '1');
+      }
+    });
     // Sprite elements
     Object.keys(spriteState).forEach(id => {
       if (spriteState[id].length > 0) {
@@ -1448,6 +1486,11 @@ const sitePlanElements = [
   { id: 'garage', name: 'Place Shed Plan', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'shedPlan' },
   { id: 'house2', name: 'Place Secondary House', icon: '🏡', color: '#cc8844', fillColor: '#cc8844', type: 'house2Plan' },
   { id: 'driveway', name: 'Driveway / Access', icon: '🛤️', color: '#999999', fillColor: '#888888', type: 'driveway' },
+  { id: 'powerline', name: 'Power Lines', icon: '⚡', color: '#ff6633', fillColor: '#ff6633', type: 'path' },
+  { id: 'underground_power', name: 'Underground Power', icon: '🔌', color: '#ff9900', fillColor: '#ff9900', type: 'path' },
+  { id: 'water_pipe', name: 'Water Pipe', icon: '🚿', color: '#3399ff', fillColor: '#3399ff', type: 'path' },
+  { id: 'sewage_pipe', name: 'Sewage Pipe', icon: '🟤', color: '#886644', fillColor: '#886644', type: 'path' },
+  { id: 'powerpole', name: 'Power Pole', icon: '🔺', color: '#cc4400', fillColor: '#cc4400', type: 'sprite', spriteW: 4, spriteH: 4 },
   { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'sprite', spriteW: 6, spriteH: 3 },
   { id: 'watertank', name: 'Water Tank', icon: '💧', color: '#2299dd', fillColor: '#2299dd', type: 'sprite', spriteW: 3, spriteH: 3 },
   { id: 'fence', name: 'Fencing', icon: '🔲', color: '#ddaa33', fillColor: 'transparent', type: 'polyline' },
@@ -1528,13 +1571,29 @@ sitePlanElements.forEach(el => {
     drawToolsContainer.appendChild(controls);
   }
 
+  // Add generic path controls panel
+  if (el.type === 'path') {
+    const controls = document.createElement('div');
+    controls.className = 'house-plan-controls';
+    controls.id = el.id + 'Controls';
+    controls.innerHTML = `
+      <div class="hint" id="${el.id}Hint">Click an endpoint to select it, then add points from that end. Right-click a vertex to remove it.</div>
+      <div class="house-plan-btn-row">
+        <button onclick="startPathDrawing('${el.id}')" id="${el.id}AddBtn">Add Points</button>
+        <button onclick="lockPath('${el.id}')" id="${el.id}LockBtn">Lock Path</button>
+        <button class="danger" onclick="removePath('${el.id}')">Remove</button>
+      </div>
+    `;
+    drawToolsContainer.appendChild(controls);
+  }
+
   // Add driveway controls panel right after the driveway button
   if (el.type === 'driveway') {
     const controls = document.createElement('div');
     controls.className = 'house-plan-controls';
     controls.id = 'drivewayControls';
     controls.innerHTML = `
-      <div class="hint" id="drivewayHint">Click map to add points. Right-click a vertex to remove it. Drag vertices to reposition.</div>
+      <div class="hint" id="drivewayHint">Click an endpoint to select it, then add points from that end. Right-click a vertex to remove it.</div>
       <div class="house-plan-btn-row">
         <button onclick="startDrivewayDrawing()" id="drivewayAddBtn">Add Points</button>
         <button onclick="lockDriveway()" id="drivewayLockBtn">Lock Path</button>
@@ -1554,7 +1613,8 @@ const drivewayState = {
   markers: [],       // L.Marker for each vertex
   drawing: false,    // Whether we're in add-point mode
   locked: false,     // When locked, render smooth textured driveway
-  lockedLayers: []   // Multiple polyline layers for the textured look
+  lockedLayers: [],  // Multiple polyline layers for the textured look
+  insertEnd: 'end'   // 'start' or 'end' — which end new points are added to
 };
 
 // Catmull-Rom spline: interpolate smooth curve through control points
@@ -1727,10 +1787,15 @@ function renderLockedDriveway() {
 }
 
 function createDrivewayVertex(index) {
+  const isEndpoint = (index === 0 || index === drivewayState.points.length - 1);
+  const isSelected = isEndpoint && (
+    (index === 0 && drivewayState.insertEnd === 'start') ||
+    (index === drivewayState.points.length - 1 && drivewayState.insertEnd === 'end')
+  );
   const icon = L.divIcon({
-    className: 'driveway-vertex',
-    iconSize: [12, 12],
-    iconAnchor: [6, 6]
+    className: 'driveway-vertex' + (isSelected ? ' path-vertex-selected' : ''),
+    iconSize: [isEndpoint ? 14 : 12, isEndpoint ? 14 : 12],
+    iconAnchor: [isEndpoint ? 7 : 6, isEndpoint ? 7 : 6]
   });
   const marker = L.marker(drivewayState.points[index], {
     icon: icon,
@@ -1738,6 +1803,15 @@ function createDrivewayVertex(index) {
     pane: 'markerPane',
     zIndexOffset: 500
   }).addTo(map);
+
+  // Click endpoint to select insertion direction
+  if (isEndpoint) {
+    marker.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
+      drivewayState.insertEnd = (index === 0) ? 'start' : 'end';
+      renderDriveway();
+    });
+  }
 
   // Drag to reposition
   marker.on('drag', function() {
@@ -1803,7 +1877,11 @@ function stopDrivewayDrawing() {
 function onDrivewayMapClick(e) {
   if (!drivewayState.drawing) return;
   _featureJustClicked = true; // prevent feature info panel from showing
-  drivewayState.points.push(e.latlng);
+  if (drivewayState.insertEnd === 'start') {
+    drivewayState.points.unshift(e.latlng);
+  } else {
+    drivewayState.points.push(e.latlng);
+  }
   renderDriveway();
   saveDrivewayState();
 }
@@ -1825,7 +1903,7 @@ function updateDrivewayLockUI() {
   if (addBtn) addBtn.style.display = drivewayState.locked ? 'none' : '';
   if (hint) hint.textContent = drivewayState.locked
     ? 'Path locked with smooth rendering. Unlock to edit points.'
-    : 'Click map to add points. Right-click a vertex to remove it. Drag vertices to reposition.';
+    : 'Click an endpoint to select it, then add points from that end. Right-click a vertex to remove it.';
 }
 
 function removeDriveway() {
@@ -1873,6 +1951,375 @@ if (urlState.driveway && urlState.driveway.length > 0) {
 }
 
 // ============================
+// GENERIC PATH ELEMENTS (Powerlines, Underground Power, Water/Sewage Pipes)
+// ============================
+const pathStates = {};
+const pathDefs = {
+  powerline: {
+    color: '#ff6633', weight: 3, dashArray: null,
+    lockedLayers: function(smooth, origin, conv) {
+      // Overhead powerline: solid orange-red line with small cross-marks
+      return buildPathSVG(smooth, origin, conv, 0.5, [
+        { color: '#cc3300', width: 1.0, opacity: '0.9' },
+        { color: '#ff6633', width: 0.6, opacity: '0.95' }
+      ], 'powerline');
+    }
+  },
+  underground_power: {
+    color: '#ff9900', weight: 3, dashArray: '10, 6',
+    lockedLayers: function(smooth, origin, conv) {
+      // Underground power: dashed orange
+      return buildPathSVG(smooth, origin, conv, 0.4, [
+        { color: '#cc7700', width: 0.8, opacity: '0.9', dash: '0.8,0.4' },
+        { color: '#ff9900', width: 0.5, opacity: '0.95', dash: '0.8,0.4' }
+      ]);
+    }
+  },
+  water_pipe: {
+    color: '#3399ff', weight: 3, dashArray: '12, 4',
+    lockedLayers: function(smooth, origin, conv) {
+      // Water pipe: dashed blue
+      return buildPathSVG(smooth, origin, conv, 0.4, [
+        { color: '#1166cc', width: 0.8, opacity: '0.9', dash: '0.8,0.3' },
+        { color: '#3399ff', width: 0.5, opacity: '0.95', dash: '0.8,0.3' }
+      ]);
+    }
+  },
+  sewage_pipe: {
+    color: '#886644', weight: 3, dashArray: '8, 8',
+    lockedLayers: function(smooth, origin, conv) {
+      // Sewage pipe: dashed brown
+      return buildPathSVG(smooth, origin, conv, 0.4, [
+        { color: '#664422', width: 0.8, opacity: '0.9', dash: '0.6,0.5' },
+        { color: '#886644', width: 0.5, opacity: '0.95', dash: '0.6,0.5' }
+      ]);
+    }
+  }
+};
+
+// Build SVG overlay for a locked path
+function buildPathSVG(smooth, origin, conv, pathWidth, layers, pathType) {
+  const meterPts = smooth.map(pt => ({
+    x: (pt.lng - origin.lng) / conv.lng,
+    y: (pt.lat - origin.lat) / conv.lat
+  }));
+
+  const pad = pathWidth * 4;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  meterPts.forEach(pt => {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  });
+  minX -= pad; maxX += pad;
+  minY -= pad; maxY += pad;
+
+  const pathD = meterPts.map((pt, i) => {
+    const cmd = i === 0 ? 'M' : 'L';
+    return `${cmd}${pt.x.toFixed(3)},${(-pt.y).toFixed(3)}`;
+  }).join(' ');
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('xmlns', svgNS);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('viewBox', `${minX} ${-maxY} ${maxX - minX} ${maxY - minY}`);
+
+  layers.forEach(l => {
+    const p = document.createElementNS(svgNS, 'path');
+    p.setAttribute('d', pathD);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', l.color);
+    p.setAttribute('stroke-width', l.width);
+    p.setAttribute('stroke-opacity', l.opacity);
+    p.setAttribute('stroke-linecap', 'round');
+    p.setAttribute('stroke-linejoin', 'round');
+    if (l.dash) p.setAttribute('stroke-dasharray', l.dash);
+    svg.appendChild(p);
+  });
+
+  // For powerlines, add small cross-marks along the path to indicate wires
+  if (pathType === 'powerline') {
+    const crossSpacing = 3; // metres between crosses
+    let accum = 0;
+    for (let i = 1; i < meterPts.length; i++) {
+      const dx = meterPts[i].x - meterPts[i-1].x;
+      const dy = meterPts[i].y - meterPts[i-1].y;
+      const segLen = Math.sqrt(dx*dx + dy*dy);
+      if (segLen === 0) continue;
+      const nx = -dy / segLen, ny = dx / segLen;
+      let d = (crossSpacing - accum);
+      while (d <= segLen) {
+        const t = d / segLen;
+        const cx = meterPts[i-1].x + dx * t;
+        const cy = -(meterPts[i-1].y + dy * t);
+        const sz = 0.3;
+        const line = document.createElementNS(svgNS, 'line');
+        line.setAttribute('x1', cx + nx * sz);
+        line.setAttribute('y1', cy - ny * sz);
+        line.setAttribute('x2', cx - nx * sz);
+        line.setAttribute('y2', cy + ny * sz);
+        line.setAttribute('stroke', '#cc3300');
+        line.setAttribute('stroke-width', '0.15');
+        line.setAttribute('stroke-opacity', '0.8');
+        svg.appendChild(line);
+        d += crossSpacing;
+      }
+      accum = segLen - (d - crossSpacing);
+    }
+  }
+
+  const swLat = origin.lat + minY * conv.lat;
+  const swLng = origin.lng + minX * conv.lng;
+  const neLat = origin.lat + maxY * conv.lat;
+  const neLng = origin.lng + maxX * conv.lng;
+  const bounds = L.latLngBounds([swLat, swLng], [neLat, neLng]);
+  return L.svgOverlay(svg, bounds, { interactive: false, pane: 'overlayPane' });
+}
+
+// Initialize path states
+['powerline', 'underground_power', 'water_pipe', 'sewage_pipe'].forEach(id => {
+  pathStates[id] = {
+    points: [],
+    polyline: null,
+    markers: [],
+    drawing: false,
+    locked: false,
+    lockedLayers: [],
+    insertEnd: 'end'
+  };
+});
+
+function clearPathLayers(id) {
+  const ps = pathStates[id];
+  if (ps.polyline) { map.removeLayer(ps.polyline); ps.polyline = null; }
+  ps.lockedLayers.forEach(l => map.removeLayer(l));
+  ps.lockedLayers = [];
+  ps.markers.forEach(m => map.removeLayer(m));
+  ps.markers = [];
+}
+
+function renderPath(id) {
+  clearPathLayers(id);
+  const ps = pathStates[id];
+  if (ps.points.length < 2) {
+    if (ps.points.length === 1 && !ps.locked) {
+      const m = createPathVertex(id, 0);
+      ps.markers.push(m);
+    }
+    updatePathInList(id);
+    return;
+  }
+  if (ps.locked) {
+    renderLockedPath(id);
+  } else {
+    renderUnlockedPath(id);
+  }
+  updatePathInList(id);
+}
+
+function renderUnlockedPath(id) {
+  const ps = pathStates[id];
+  const def = pathDefs[id];
+  ps.polyline = L.polyline(ps.points, {
+    color: def.color,
+    weight: def.weight,
+    opacity: 0.9,
+    dashArray: '8, 6',
+    interactive: false
+  }).addTo(map);
+  ps.points.forEach((pt, i) => {
+    const m = createPathVertex(id, i);
+    ps.markers.push(m);
+  });
+}
+
+function renderLockedPath(id) {
+  const ps = pathStates[id];
+  const def = pathDefs[id];
+  const smooth = catmullRomSpline(ps.points, 40);
+  if (smooth.length < 2) return;
+  const origin = smooth[0];
+  const conv = metersToLatLng(1, origin.lat);
+  const overlay = def.lockedLayers(smooth, origin, conv);
+  overlay.addTo(map);
+  ps.lockedLayers.push(overlay);
+}
+
+function createPathVertex(id, index) {
+  const ps = pathStates[id];
+  const isEndpoint = (index === 0 || index === ps.points.length - 1);
+  const isSelected = isEndpoint && (
+    (index === 0 && ps.insertEnd === 'start') ||
+    (index === ps.points.length - 1 && ps.insertEnd === 'end')
+  );
+  const elDef = sitePlanElements.find(e => e.id === id);
+  const borderColor = elDef ? elDef.color : '#999';
+  const icon = L.divIcon({
+    className: 'path-vertex' + (isSelected ? ' path-vertex-selected' : ''),
+    iconSize: [isEndpoint ? 14 : 10, isEndpoint ? 14 : 10],
+    iconAnchor: [isEndpoint ? 7 : 5, isEndpoint ? 7 : 5]
+  });
+  const marker = L.marker(ps.points[index], {
+    icon: icon,
+    draggable: true,
+    pane: 'markerPane',
+    zIndexOffset: 500
+  }).addTo(map);
+
+  // Click endpoint to select insertion direction
+  if (isEndpoint) {
+    marker.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
+      ps.insertEnd = (index === 0) ? 'start' : 'end';
+      renderPath(id);
+    });
+  }
+
+  marker.on('drag', function() {
+    ps.points[index] = marker.getLatLng();
+    if (ps.polyline) ps.polyline.setLatLngs(ps.points);
+  });
+  marker.on('dragend', function() {
+    ps.points[index] = marker.getLatLng();
+    savePathState(id);
+  });
+  marker.on('contextmenu', function(e) {
+    L.DomEvent.stopPropagation(e);
+    L.DomEvent.preventDefault(e);
+    ps.points.splice(index, 1);
+    renderPath(id);
+    savePathState(id);
+  });
+  return marker;
+}
+
+function startPathDrawing(id) {
+  const ps = pathStates[id];
+  if (ps.locked) return; // can't draw while locked
+  if (ps.drawing) {
+    stopPathDrawing(id);
+    return;
+  }
+  ps.drawing = true;
+  const btn = document.getElementById('drawbtn-' + id);
+  if (btn) btn.classList.add('active');
+  showPathControls(id);
+  updatePathAddBtn(id);
+  map.getContainer().classList.add('drawing-mode');
+  const handler = function(e) { onPathMapClick(id, e); };
+  ps._clickHandler = handler;
+  map.on('click', handler);
+}
+
+function stopPathDrawing(id) {
+  const ps = pathStates[id];
+  ps.drawing = false;
+  const btn = document.getElementById('drawbtn-' + id);
+  if (btn) btn.classList.remove('active');
+  updatePathAddBtn(id);
+  map.getContainer().classList.remove('drawing-mode');
+  if (ps._clickHandler) {
+    map.off('click', ps._clickHandler);
+    ps._clickHandler = null;
+  }
+}
+
+function onPathMapClick(id, e) {
+  const ps = pathStates[id];
+  if (!ps.drawing) return;
+  _featureJustClicked = true;
+  if (ps.insertEnd === 'start') {
+    ps.points.unshift(e.latlng);
+  } else {
+    ps.points.push(e.latlng);
+  }
+  renderPath(id);
+  savePathState(id);
+}
+
+function lockPath(id) {
+  const ps = pathStates[id];
+  if (ps.points.length < 2) return;
+  ps.locked = !ps.locked;
+  if (ps.locked) stopPathDrawing(id);
+  renderPath(id);
+  savePathState(id);
+  updatePathLockUI(id);
+}
+
+function showPathControls(id) {
+  const ctrl = document.getElementById(id + 'Controls');
+  if (ctrl) ctrl.classList.add('visible');
+}
+
+function updatePathAddBtn(id) {
+  const ps = pathStates[id];
+  const btn = document.getElementById(id + 'AddBtn');
+  if (btn) btn.textContent = ps.drawing ? 'Stop Drawing' : 'Add Points';
+}
+
+function updatePathLockUI(id) {
+  const ps = pathStates[id];
+  const lockBtn = document.getElementById(id + 'LockBtn');
+  const addBtn = document.getElementById(id + 'AddBtn');
+  const hint = document.getElementById(id + 'Hint');
+  if (lockBtn) lockBtn.textContent = ps.locked ? 'Unlock Path' : 'Lock Path';
+  if (addBtn) addBtn.style.display = ps.locked ? 'none' : '';
+  if (hint) hint.textContent = ps.locked
+    ? 'Path locked. Unlock to edit points.'
+    : 'Click an endpoint to select it, then add points from that end. Right-click a vertex to remove it.';
+}
+
+function removePath(id) {
+  stopPathDrawing(id);
+  const ps = pathStates[id];
+  ps.points = [];
+  ps.locked = false;
+  ps.insertEnd = 'end';
+  renderPath(id);
+  savePathState(id);
+  const ctrl = document.getElementById(id + 'Controls');
+  if (ctrl) ctrl.classList.remove('visible');
+}
+
+function savePathState(id) {
+  UrlState.push();
+}
+
+function updatePathInList(id) {
+  const existingIdx = placedElements.findIndex(e => e.id === 'path-' + id);
+  if (existingIdx >= 0) placedElements.splice(existingIdx, 1);
+  const ps = pathStates[id];
+  if (ps.points.length >= 2) {
+    let dist = 0;
+    for (let i = 1; i < ps.points.length; i++) {
+      dist += ps.points[i - 1].distanceTo(ps.points[i]);
+    }
+    placedElements.push({
+      id: 'path-' + id,
+      layer: ps.polyline,
+      type: sitePlanElements.find(e => e.id === id),
+      measurement: dist.toFixed(0) + ' m'
+    });
+  }
+  updateElementsList();
+}
+
+// Restore generic paths from URL state
+['powerline', 'underground_power', 'water_pipe', 'sewage_pipe'].forEach(id => {
+  const saved = (urlState.paths || {})[id];
+  if (saved && saved.points && saved.points.length > 0) {
+    pathStates[id].points = saved.points;
+    if (saved.locked) pathStates[id].locked = true;
+    renderPath(id);
+    showPathControls(id);
+    updatePathLockUI(id);
+  }
+});
+
+// ============================
 // SPRITE ELEMENTS (Septic, Water Tank, etc.)
 // ============================
 const spriteState = {}; // { elementId: [{ latlng, marker, overlay }] }
@@ -1907,6 +2354,25 @@ function buildSpriteSVG(elId, w, h, uid) {
       <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="${swThin*0.6}"/>
       <rect x="${w-w*0.08}" y="${h*0.35}" width="${w*0.08}" height="${h*0.15}" rx="${w*0.01}" fill="#6a6a6a" stroke="#444" stroke-width="${swThin*0.5}"/>
       <rect x="0" y="${h*0.5}" width="${w*0.08}" height="${h*0.15}" rx="${w*0.01}" fill="#6a6a6a" stroke="#444" stroke-width="${swThin*0.5}"/>
+    `;
+  } else if (elId === 'powerpole') {
+    // Top-down view of a power pole: circular cross-section with cross-arms
+    const cx = w / 2, cy = h / 2;
+    const poleR = Math.min(w, h) * 0.15;
+    const armLen = Math.min(w, h) * 0.42;
+    const armW = Math.min(w, h) * 0.04;
+    svg.innerHTML = `
+      <defs>
+        <radialGradient id="ppGr${uid}" cx="40%" cy="40%">
+          <stop offset="0%" stop-color="#b89870"/><stop offset="100%" stop-color="#7a6040"/>
+        </radialGradient>
+      </defs>
+      <line x1="${cx - armLen}" y1="${cy}" x2="${cx + armLen}" y2="${cy}" stroke="#8a7050" stroke-width="${armW}" stroke-linecap="round"/>
+      <line x1="${cx}" y1="${cy - armLen * 0.7}" x2="${cx}" y2="${cy + armLen * 0.7}" stroke="#8a7050" stroke-width="${armW * 0.7}" stroke-linecap="round"/>
+      <circle cx="${cx}" cy="${cy}" r="${poleR}" fill="url(#ppGr${uid})" stroke="#5a4530" stroke-width="${sw}"/>
+      <circle cx="${cx}" cy="${cy}" r="${poleR * 0.4}" fill="#5a4530"/>
+      <circle cx="${cx - armLen * 0.85}" cy="${cy}" r="${Math.min(w,h)*0.04}" fill="#444"/>
+      <circle cx="${cx + armLen * 0.85}" cy="${cy}" r="${Math.min(w,h)*0.04}" fill="#444"/>
     `;
   } else if (elId === 'watertank') {
     const r = w / 2 - sw;
@@ -1954,6 +2420,13 @@ function createSpriteInstance(elDef, latlng) {
   });
   const marker = L.marker(latlng, { icon: invisIcon, draggable: true, zIndexOffset: 500 }).addTo(map);
 
+  // Create label marker for power poles (P1, P2, etc.)
+  let labelMarker = null;
+  if (elDef.id === 'powerpole') {
+    labelMarker = createPowerPoleLabel(latlng, 0); // index updated later
+    labelMarker.addTo(map);
+  }
+
   // Right-click to remove
   marker.on('contextmenu', function(e) {
     L.DomEvent.stopPropagation(e);
@@ -1966,6 +2439,7 @@ function createSpriteInstance(elDef, latlng) {
     const pos = marker.getLatLng();
     const newBounds = getSpriteBounds(pos, elDef);
     overlay.setBounds(newBounds);
+    if (labelMarker) labelMarker.setLatLng(pos);
   });
 
   marker.on('dragend', function() {
@@ -1981,18 +2455,58 @@ function createSpriteInstance(elDef, latlng) {
   });
 
   marker.on('click', function() {
-    showFeatureInfo(`<strong>${elDef.icon} ${elDef.name}</strong><br><span style="color:#888;">Drag to move. Right-click to remove.</span>`, true);
+    const instances = spriteState[elDef.id] || [];
+    const inst = instances.find(s => s.marker === marker);
+    const idx = inst ? instances.indexOf(inst) + 1 : '?';
+    const label = elDef.id === 'powerpole' ? ` (P${idx})` : '';
+    showFeatureInfo(`<strong>${elDef.icon} ${elDef.name}${label}</strong><br><span style="color:#888;">Drag to move. Right-click to remove.</span>`, true);
   });
 
-  return { marker, overlay };
+  return { marker, overlay, labelMarker };
 }
+
+function getPowerPoleLabelSize() {
+  // Scale from 10px at zoom 15 to 22px at zoom 20+
+  const z = map.getZoom();
+  return Math.round(Math.min(22, Math.max(10, 10 + (z - 15) * 2.4)));
+}
+
+function createPowerPoleLabel(latlng, index) {
+  const sz = getPowerPoleLabelSize();
+  const icon = L.divIcon({
+    className: 'powerpole-label',
+    html: '<span style="font-size:' + sz + 'px">P' + (index + 1) + '</span>',
+    iconSize: [sz * 2, sz],
+    iconAnchor: [-(sz * 0.4), sz * 0.4]
+  });
+  return L.marker(latlng, { icon: icon, interactive: false, pane: 'markerPane', zIndexOffset: 400 });
+}
+
+function updatePowerPoleLabels() {
+  const instances = spriteState['powerpole'] || [];
+  instances.forEach((inst, i) => {
+    if (inst.labelMarker) {
+      map.removeLayer(inst.labelMarker);
+    }
+    inst.labelMarker = createPowerPoleLabel(inst.latlng, i);
+    inst.labelMarker.addTo(map);
+  });
+}
+
+// Update power pole label sizes on zoom change
+map.on('zoomend', function() {
+  if (spriteState['powerpole'] && spriteState['powerpole'].length > 0) {
+    updatePowerPoleLabels();
+  }
+});
 
 function addSpriteInstance(elId, latlng) {
   const elDef = sitePlanElements.find(e => e.id === elId);
   if (!elDef) return;
   if (!spriteState[elId]) spriteState[elId] = [];
-  const { marker, overlay } = createSpriteInstance(elDef, latlng);
-  spriteState[elId].push({ latlng: latlng, marker: marker, overlay: overlay });
+  const { marker, overlay, labelMarker } = createSpriteInstance(elDef, latlng);
+  spriteState[elId].push({ latlng: latlng, marker: marker, overlay: overlay, labelMarker: labelMarker });
+  if (elId === 'powerpole') updatePowerPoleLabels();
   UrlState.push();
   updateSpriteInList(elId);
 }
@@ -2003,7 +2517,9 @@ function removeSpriteInstance(elId, marker) {
   if (idx >= 0) {
     map.removeLayer(spriteState[elId][idx].marker);
     map.removeLayer(spriteState[elId][idx].overlay);
+    if (spriteState[elId][idx].labelMarker) map.removeLayer(spriteState[elId][idx].labelMarker);
     spriteState[elId].splice(idx, 1);
+    if (elId === 'powerpole') updatePowerPoleLabels();
     UrlState.push();
     updateSpriteInList(elId);
   }
@@ -2014,6 +2530,7 @@ function removeAllSprites(elId) {
   spriteState[elId].forEach(s => {
     map.removeLayer(s.marker);
     map.removeLayer(s.overlay);
+    if (s.labelMarker) map.removeLayer(s.labelMarker);
   });
   spriteState[elId] = [];
   UrlState.push();
@@ -2076,9 +2593,10 @@ Object.keys(urlState.sprites || {}).forEach(elId => {
   if (!elDef) return;
   if (!spriteState[elId]) spriteState[elId] = [];
   points.forEach(ll => {
-    const { marker, overlay } = createSpriteInstance(elDef, ll);
-    spriteState[elId].push({ latlng: ll, marker: marker, overlay: overlay });
+    const { marker, overlay, labelMarker } = createSpriteInstance(elDef, ll);
+    spriteState[elId].push({ latlng: ll, marker: marker, overlay: overlay, labelMarker: labelMarker });
   });
+  if (elId === 'powerpole') updatePowerPoleLabels();
   updateSpriteInList(elId);
 });
 
@@ -2983,6 +3501,12 @@ function startDrawing(el) {
   // Handle driveway path drawing
   if (el.type === 'driveway') {
     startDrivewayDrawing();
+    return;
+  }
+
+  // Handle generic path elements (powerline, underground power, water/sewage pipes)
+  if (el.type === 'path') {
+    startPathDrawing(el.id);
     return;
   }
 
