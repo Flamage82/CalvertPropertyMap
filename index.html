@@ -2348,9 +2348,12 @@ function renderHousePlan() {
   );
   housePlanOverlay.addTo(map);
 
-  // Make it draggable if not locked
+  // Make it draggable if not locked, otherwise set default cursor
   if (!housePlanState.locked) {
     enableHousePlanDrag();
+  } else {
+    const el = housePlanOverlay.getElement();
+    if (el) el.style.cursor = 'default';
   }
 
   // Show controls
@@ -2449,6 +2452,10 @@ function lockHousePlan() {
   if (housePlanOverlay) {
     const el = housePlanOverlay.getElement();
     if (el) el.style.cursor = housePlanState.locked ? 'default' : 'move';
+    // Attach drag handlers if unlocking and they were never set up (e.g. loaded locked)
+    if (!housePlanState.locked && !housePlanOverlay._dragCleanup) {
+      enableHousePlanDrag();
+    }
   }
   // Show/hide rotation handles based on lock state
   if (housePlanHandles) housePlanHandles.update();
@@ -2490,6 +2497,10 @@ function updateHousePlanInList() {
 // Restore house plan on page load if previously placed
 if (housePlanState.placed && housePlanState.center) {
   placeHousePlan();
+  if (housePlanState.locked) {
+    const btn = document.querySelector('#housePlanControls .house-plan-btn-row button:first-child');
+    if (btn) btn.textContent = 'Unlock Position';
+  }
 }
 
 // ============================
@@ -2576,6 +2587,9 @@ function renderShedPlan() {
 
   if (!shedPlanState.locked) {
     enableShedPlanDrag();
+  } else {
+    const el = shedPlanOverlay.getElement();
+    if (el) el.style.cursor = 'default';
   }
 
   document.getElementById('shedPlanControls').classList.add('visible');
@@ -2657,6 +2671,9 @@ function lockShedPlan() {
   if (shedPlanOverlay) {
     const el = shedPlanOverlay.getElement();
     if (el) el.style.cursor = shedPlanState.locked ? 'default' : 'move';
+    if (!shedPlanState.locked && !shedPlanOverlay._dragCleanup) {
+      enableShedPlanDrag();
+    }
   }
   if (shedPlanHandles) shedPlanHandles.update();
   saveShedPlanState();
@@ -2699,6 +2716,10 @@ function updateShedPlanInList() {
 // Restore shed plan on page load if previously placed
 if (shedPlanState.placed && shedPlanState.center) {
   placeShedPlan();
+  if (shedPlanState.locked) {
+    const btn = document.querySelector('#shedPlanControls .house-plan-btn-row button:first-child');
+    if (btn) btn.textContent = 'Unlock Position';
+  }
 }
 
 // ============================
@@ -2791,6 +2812,9 @@ function renderHouse2Plan() {
 
   if (!house2PlanState.locked) {
     enableHouse2PlanDrag();
+  } else {
+    const el = house2PlanOverlay.getElement();
+    if (el) el.style.cursor = 'default';
   }
 
   document.getElementById('house2PlanControls').classList.add('visible');
@@ -2872,6 +2896,9 @@ function lockHouse2Plan() {
   if (house2PlanOverlay) {
     const el = house2PlanOverlay.getElement();
     if (el) el.style.cursor = house2PlanState.locked ? 'default' : 'move';
+    if (!house2PlanState.locked && !house2PlanOverlay._dragCleanup) {
+      enableHouse2PlanDrag();
+    }
   }
   if (house2PlanHandles) house2PlanHandles.update();
   saveHouse2PlanState();
@@ -2913,6 +2940,10 @@ function updateHouse2PlanInList() {
 // Restore secondary house plan on page load if previously placed
 if (house2PlanState.placed && house2PlanState.center) {
   placeHouse2Plan();
+  if (house2PlanState.locked) {
+    const btn = document.querySelector('#house2PlanControls .house-plan-btn-row button:first-child');
+    if (btn) btn.textContent = 'Unlock Position';
+  }
 }
 
 function startDrawing(el) {
