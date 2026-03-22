@@ -598,6 +598,7 @@ const UrlState = {
         return L.latLng(lat, lng);
       }).filter(ll => !isNaN(ll.lat) && !isNaN(ll.lng));
     }
+    if (p.has('dw_lock')) state.dwLocked = true;
     if (p.has('grid')) {
       state.grid = true;
       state.gridOpacity = p.has('grid_op') ? parseInt(p.get('grid_op')) / 100 : undefined;
@@ -649,6 +650,7 @@ const UrlState = {
     // Driveway path
     if (drivewayState.points.length > 0) {
       p.set('dw', drivewayState.points.map(ll => ll.lat.toFixed(6) + ',' + ll.lng.toFixed(6)).join(';'));
+      if (drivewayState.locked) p.set('dw_lock', '1');
     }
     // Panel state
     const panel = document.getElementById('sidePanel');
@@ -1436,9 +1438,10 @@ sitePlanElements.forEach(el => {
     controls.className = 'house-plan-controls';
     controls.id = 'drivewayControls';
     controls.innerHTML = `
-      <div class="hint">Click map to add points. Right-click a vertex to remove it. Drag vertices to reposition.</div>
+      <div class="hint" id="drivewayHint">Click map to add points. Right-click a vertex to remove it. Drag vertices to reposition.</div>
       <div class="house-plan-btn-row">
         <button onclick="startDrivewayDrawing()" id="drivewayAddBtn">Add Points</button>
+        <button onclick="lockDriveway()" id="drivewayLockBtn">Lock Path</button>
         <button class="danger" onclick="removeDriveway()">Remove</button>
       </div>
     `;
@@ -1451,24 +1454,60 @@ sitePlanElements.forEach(el => {
 // ============================
 const drivewayState = {
   points: [],       // Array of L.LatLng
-  polyline: null,    // L.Polyline on the map
+  polyline: null,    // L.Polyline on the map (unlocked: dashed guide)
   markers: [],       // L.Marker for each vertex
-  drawing: false     // Whether we're in add-point mode
+  drawing: false,    // Whether we're in add-point mode
+  locked: false,     // When locked, render smooth textured driveway
+  lockedLayers: []   // Multiple polyline layers for the textured look
 };
 
-function renderDriveway() {
-  // Remove existing polyline
+// Catmull-Rom spline: interpolate smooth curve through control points
+function catmullRomSpline(points, numSegments) {
+  if (points.length < 2) return points;
+  const result = [];
+  // Pad start/end by duplicating first/last points
+  const pts = [points[0], ...points, points[points.length - 1]];
+  for (let i = 1; i < pts.length - 2; i++) {
+    const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2];
+    for (let t = 0; t < numSegments; t++) {
+      const s = t / numSegments;
+      const s2 = s * s, s3 = s2 * s;
+      const lat = 0.5 * (
+        (2 * p1.lat) +
+        (-p0.lat + p2.lat) * s +
+        (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * s2 +
+        (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * s3
+      );
+      const lng = 0.5 * (
+        (2 * p1.lng) +
+        (-p0.lng + p2.lng) * s +
+        (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * s2 +
+        (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * s3
+      );
+      result.push(L.latLng(lat, lng));
+    }
+  }
+  // Add the very last point
+  result.push(points[points.length - 1]);
+  return result;
+}
+
+function clearDrivewayLayers() {
   if (drivewayState.polyline) {
     map.removeLayer(drivewayState.polyline);
     drivewayState.polyline = null;
   }
-  // Remove existing vertex markers
+  drivewayState.lockedLayers.forEach(l => map.removeLayer(l));
+  drivewayState.lockedLayers = [];
   drivewayState.markers.forEach(m => map.removeLayer(m));
   drivewayState.markers = [];
+}
+
+function renderDriveway() {
+  clearDrivewayLayers();
 
   if (drivewayState.points.length < 2) {
-    // Draw single point marker if one exists
-    if (drivewayState.points.length === 1) {
+    if (drivewayState.points.length === 1 && !drivewayState.locked) {
       const m = createDrivewayVertex(0);
       drivewayState.markers.push(m);
     }
@@ -1476,7 +1515,16 @@ function renderDriveway() {
     return;
   }
 
-  // Draw the polyline
+  if (drivewayState.locked) {
+    renderLockedDriveway();
+  } else {
+    renderUnlockedDriveway();
+  }
+  updateDrivewayInList();
+}
+
+function renderUnlockedDriveway() {
+  // Dashed guide line with vertex markers
   drivewayState.polyline = L.polyline(drivewayState.points, {
     color: '#cccccc',
     weight: 4,
@@ -1485,13 +1533,59 @@ function renderDriveway() {
     interactive: false
   }).addTo(map);
 
-  // Draw draggable vertex markers
   drivewayState.points.forEach((pt, i) => {
     const m = createDrivewayVertex(i);
     drivewayState.markers.push(m);
   });
+}
 
-  updateDrivewayInList();
+function renderLockedDriveway() {
+  // Smooth spline through the control points
+  const smooth = catmullRomSpline(drivewayState.points, 12);
+
+  // Layer 1: Dark outer edge (shadow/gutter)
+  const edgeOuter = L.polyline(smooth, {
+    color: '#2a2a2a',
+    weight: 18,
+    opacity: 0.7,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false
+  }).addTo(map);
+  drivewayState.lockedLayers.push(edgeOuter);
+
+  // Layer 2: Gravel base
+  const base = L.polyline(smooth, {
+    color: '#8a7d6b',
+    weight: 14,
+    opacity: 0.85,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false
+  }).addTo(map);
+  drivewayState.lockedLayers.push(base);
+
+  // Layer 3: Lighter centre strip (worn tyre tracks area)
+  const centre = L.polyline(smooth, {
+    color: '#a09585',
+    weight: 8,
+    opacity: 0.6,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false
+  }).addTo(map);
+  drivewayState.lockedLayers.push(centre);
+
+  // Layer 4: Subtle centre highlight
+  const highlight = L.polyline(smooth, {
+    color: '#b8ad9e',
+    weight: 3,
+    opacity: 0.35,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false
+  }).addTo(map);
+  drivewayState.lockedLayers.push(highlight);
 }
 
 function createDrivewayVertex(index) {
@@ -1576,9 +1670,30 @@ function onDrivewayMapClick(e) {
   saveDrivewayState();
 }
 
+function lockDriveway() {
+  if (drivewayState.points.length < 2) return;
+  drivewayState.locked = !drivewayState.locked;
+  if (drivewayState.locked) stopDrivewayDrawing();
+  renderDriveway();
+  saveDrivewayState();
+  updateDrivewayLockUI();
+}
+
+function updateDrivewayLockUI() {
+  const lockBtn = document.getElementById('drivewayLockBtn');
+  const addBtn = document.getElementById('drivewayAddBtn');
+  const hint = document.getElementById('drivewayHint');
+  if (lockBtn) lockBtn.textContent = drivewayState.locked ? 'Unlock Path' : 'Lock Path';
+  if (addBtn) addBtn.style.display = drivewayState.locked ? 'none' : '';
+  if (hint) hint.textContent = drivewayState.locked
+    ? 'Path locked with smooth rendering. Unlock to edit points.'
+    : 'Click map to add points. Right-click a vertex to remove it. Drag vertices to reposition.';
+}
+
 function removeDriveway() {
   stopDrivewayDrawing();
   drivewayState.points = [];
+  drivewayState.locked = false;
   renderDriveway();
   saveDrivewayState();
   hideDrivewayControls();
@@ -1613,8 +1728,10 @@ function updateDrivewayInList() {
 // Restore driveway from URL
 if (urlState.driveway && urlState.driveway.length > 0) {
   drivewayState.points = urlState.driveway;
+  if (urlState.dwLocked) drivewayState.locked = true;
   renderDriveway();
   showDrivewayControls();
+  updateDrivewayLockUI();
 }
 
 // ============================
