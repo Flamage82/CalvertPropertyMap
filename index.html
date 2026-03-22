@@ -636,6 +636,14 @@ const UrlState = {
         locked: p.get('sp_lock') === '1'
       };
     }
+    if (p.has('h2_lat') && p.has('h2_lng')) {
+      state.house2Plan = {
+        lat: parseFloat(p.get('h2_lat')),
+        lng: parseFloat(p.get('h2_lng')),
+        rotation: p.has('h2_rot') ? parseInt(p.get('h2_rot')) : 0,
+        locked: p.get('h2_lock') === '1'
+      };
+    }
     if (p.has('dw')) {
       state.driveway = p.get('dw').split(';').map(pt => {
         const [lat, lng] = pt.split(',').map(Number);
@@ -701,6 +709,13 @@ const UrlState = {
       p.set('sp_lng', shedPlanState.center.lng.toFixed(6));
       if (shedPlanState.rotation) p.set('sp_rot', shedPlanState.rotation);
       if (shedPlanState.locked) p.set('sp_lock', '1');
+    }
+    // Secondary house plan
+    if (house2PlanState.placed && house2PlanState.center) {
+      p.set('h2_lat', house2PlanState.center.lat.toFixed(6));
+      p.set('h2_lng', house2PlanState.center.lng.toFixed(6));
+      if (house2PlanState.rotation) p.set('h2_rot', house2PlanState.rotation);
+      if (house2PlanState.locked) p.set('h2_lock', '1');
     }
     // Driveway path
     if (drivewayState.points.length > 0) {
@@ -1431,6 +1446,7 @@ map.addLayer(drawnItems);
 const sitePlanElements = [
   { id: 'house', name: 'Place House Plan', icon: '🏠', color: '#4a9eff', fillColor: '#4a9eff', type: 'housePlan' },
   { id: 'garage', name: 'Place Shed Plan', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'shedPlan' },
+  { id: 'house2', name: 'Place Secondary House', icon: '🏡', color: '#cc8844', fillColor: '#cc8844', type: 'house2Plan' },
   { id: 'driveway', name: 'Driveway / Access', icon: '🛤️', color: '#999999', fillColor: '#888888', type: 'driveway' },
   { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'sprite', spriteW: 6, spriteH: 3 },
   { id: 'watertank', name: 'Water Tank', icon: '💧', color: '#2299dd', fillColor: '#2299dd', type: 'sprite', spriteW: 3, spriteH: 3 },
@@ -1488,6 +1504,25 @@ sitePlanElements.forEach(el => {
       <div class="house-plan-btn-row">
         <button onclick="lockShedPlan()">Lock Position</button>
         <button class="danger" onclick="removeShedPlan()">Remove</button>
+      </div>
+    `;
+    drawToolsContainer.appendChild(controls);
+  }
+
+  // Add secondary house plan controls panel
+  if (el.type === 'house2Plan') {
+    const controls = document.createElement('div');
+    controls.className = 'house-plan-controls';
+    controls.id = 'house2PlanControls';
+    controls.innerHTML = `
+      <div class="control-row">
+        <label style="margin:0">Rotation</label>
+        <span class="value-display" id="house2PlanRotVal">0°</span>
+      </div>
+      <div class="hint">Drag to move. Drag corner handles to rotate.</div>
+      <div class="house-plan-btn-row">
+        <button onclick="lockHouse2Plan()">Lock Position</button>
+        <button class="danger" onclick="removeHouse2Plan()">Remove</button>
       </div>
     `;
     drawToolsContainer.appendChild(controls);
@@ -2243,7 +2278,7 @@ function createRotationHandles(planState, renderFn, saveFn, cssClass) {
       let newRot = ((startRotation + deltaDeg) % 360 + 360) % 360;
       planState.rotation = Math.round(newRot);
 
-      const displayId = cssClass === 'shed' ? 'shedPlanRotVal' : 'housePlanRotVal';
+      const displayId = cssClass === 'shed' ? 'shedPlanRotVal' : cssClass === 'house2' ? 'house2PlanRotVal' : 'housePlanRotVal';
       document.getElementById(displayId).textContent = planState.rotation + '°';
 
       renderFn();
@@ -2666,6 +2701,220 @@ if (shedPlanState.placed && shedPlanState.center) {
   placeShedPlan();
 }
 
+// ============================
+// SECONDARY HOUSE PLAN (house2)
+// ============================
+let house2PlanOverlay = null;
+let house2PlanHandles = null;
+let house2PlanState = {
+  placed: false,
+  locked: false,
+  center: null,
+  rotation: 0,
+  widthM: 6.76,
+  heightM: 20.44,
+  svgContent: null,
+  svgUrl: 'overlays/house2_plan.svg'
+};
+
+// Restore saved state — URL params override localStorage
+if (urlState.house2Plan) {
+  house2PlanState.placed = true;
+  house2PlanState.center = L.latLng(urlState.house2Plan.lat, urlState.house2Plan.lng);
+  house2PlanState.rotation = urlState.house2Plan.rotation || 0;
+  house2PlanState.locked = urlState.house2Plan.locked || false;
+} else {
+  try {
+    const saved = localStorage.getItem('house2PlanState');
+    if (saved) {
+      const s = JSON.parse(saved);
+      if (s.placed) {
+        house2PlanState = { ...house2PlanState, ...s };
+        house2PlanState.center = L.latLng(s.center.lat, s.center.lng);
+      }
+    }
+  } catch(e) {}
+}
+
+function saveHouse2PlanState() {
+  const s = { ...house2PlanState };
+  if (s.center) s.center = { lat: s.center.lat, lng: s.center.lng };
+  delete s.svgContent;
+  localStorage.setItem('house2PlanState', JSON.stringify(s));
+  UrlState.push();
+}
+
+function getHouse2PlanBounds(center, rotation) {
+  return getPlanBounds(center, house2PlanState.widthM, house2PlanState.heightM, rotation);
+}
+
+function createHouse2PlanOverlay(svgContent, center, rotation) {
+  return createPlanOverlay(svgContent, center, rotation,
+    house2PlanState.widthM, house2PlanState.heightM, 'house2-plan-overlay');
+}
+
+function placeHouse2Plan() {
+  const center = house2PlanState.center || map.getCenter();
+  house2PlanState.center = center;
+  house2PlanState.placed = true;
+
+  if (!house2PlanState.svgContent) {
+    fetch(house2PlanState.svgUrl)
+      .then(r => r.text())
+      .then(svg => {
+        // The house2 SVG uses viewBox "0 0 263 776" (arbitrary units, not mm).
+        // Wrap the inner content in a nested <svg> that maps to mm-space
+        // so it works with createPlanOverlay's mm-based wrapper.
+        const match = svg.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
+        const inner = match ? match[1] : svg;
+        const wMM = house2PlanState.widthM * 1000;
+        const hMM = house2PlanState.heightM * 1000;
+        house2PlanState.svgContent = `<svg viewBox="0 0 263 776" width="${wMM}" height="${hMM}" x="0" y="0">${inner}</svg>`;
+        renderHouse2Plan();
+      })
+      .catch(e => console.error('Failed to load secondary house plan SVG:', e));
+  } else {
+    renderHouse2Plan();
+  }
+}
+
+function renderHouse2Plan() {
+  if (house2PlanOverlay) {
+    map.removeLayer(house2PlanOverlay);
+  }
+  house2PlanOverlay = createHouse2PlanOverlay(
+    house2PlanState.svgContent,
+    house2PlanState.center,
+    house2PlanState.rotation
+  );
+  house2PlanOverlay.addTo(map);
+
+  if (!house2PlanState.locked) {
+    enableHouse2PlanDrag();
+  }
+
+  document.getElementById('house2PlanControls').classList.add('visible');
+  document.getElementById('house2PlanRotVal').textContent = house2PlanState.rotation + '°';
+
+  // Create or update rotation handles
+  if (!house2PlanHandles) {
+    house2PlanHandles = createRotationHandles(house2PlanState, renderHouse2Plan, saveHouse2PlanState, 'house2');
+  }
+  house2PlanHandles.update();
+
+  updateHouse2PlanInList();
+  saveHouse2PlanState();
+}
+
+function enableHouse2PlanDrag() {
+  if (!house2PlanOverlay) return;
+  const el = house2PlanOverlay.getElement();
+  if (!el) return;
+  el.style.cursor = 'move';
+
+  let dragging = false;
+  let startLatLng = null;
+
+  function onMouseDown(e) {
+    if (house2PlanState.locked) return;
+    dragging = true;
+    startLatLng = map.mouseEventToLatLng(e);
+    map.dragging.disable();
+    if (house2PlanHandles) house2PlanHandles.markers.forEach(m => map.removeLayer(m));
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  function onMouseMove(e) {
+    if (!dragging) return;
+    const cur = map.mouseEventToLatLng(e);
+    house2PlanState.center = L.latLng(
+      house2PlanState.center.lat + cur.lat - startLatLng.lat,
+      house2PlanState.center.lng + cur.lng - startLatLng.lng
+    );
+    startLatLng = cur;
+    house2PlanOverlay.setBounds(getHouse2PlanBounds(house2PlanState.center, house2PlanState.rotation));
+  }
+  function onMouseUp() {
+    if (!dragging) return;
+    dragging = false;
+    map.dragging.enable();
+    saveHouse2PlanState();
+    if (house2PlanHandles) house2PlanHandles.update();
+  }
+
+  el.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+
+  el.addEventListener('touchstart', function(e) {
+    if (house2PlanState.locked) return;
+    const t = e.touches[0];
+    onMouseDown({ clientX: t.clientX, clientY: t.clientY, stopPropagation: () => e.stopPropagation(), preventDefault: () => e.preventDefault() });
+  }, { passive: false });
+  document.addEventListener('touchmove', function(e) {
+    if (!dragging) return;
+    const t = e.touches[0];
+    onMouseMove({ clientX: t.clientX, clientY: t.clientY });
+  });
+  document.addEventListener('touchend', function() { onMouseUp(); });
+
+  house2PlanOverlay._dragCleanup = () => {
+    el.removeEventListener('mousedown', onMouseDown);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+}
+
+function lockHouse2Plan() {
+  house2PlanState.locked = !house2PlanState.locked;
+  const btn = document.querySelector('#house2PlanControls .house-plan-btn-row button:first-child');
+  if (btn) btn.textContent = house2PlanState.locked ? 'Unlock Position' : 'Lock Position';
+  if (house2PlanOverlay) {
+    const el = house2PlanOverlay.getElement();
+    if (el) el.style.cursor = house2PlanState.locked ? 'default' : 'move';
+  }
+  if (house2PlanHandles) house2PlanHandles.update();
+  saveHouse2PlanState();
+}
+
+function removeHouse2Plan() {
+  if (house2PlanOverlay) {
+    if (house2PlanOverlay._dragCleanup) house2PlanOverlay._dragCleanup();
+    map.removeLayer(house2PlanOverlay);
+    house2PlanOverlay = null;
+  }
+  if (house2PlanHandles) { house2PlanHandles.cleanup(); house2PlanHandles = null; }
+  house2PlanState.placed = false;
+  house2PlanState.locked = false;
+  house2PlanState.center = null;
+  house2PlanState.rotation = 0;
+  document.getElementById('house2PlanControls').classList.remove('visible');
+  document.getElementById('house2PlanRotVal').textContent = '0°';
+  localStorage.removeItem('house2PlanState');
+  const idx = placedElements.findIndex(e => e.id === 'house2Plan');
+  if (idx >= 0) placedElements.splice(idx, 1);
+  updateElementsList();
+  UrlState.push();
+}
+
+function updateHouse2PlanInList() {
+  const existing = placedElements.find(e => e.id === 'house2Plan');
+  if (!existing && house2PlanState.placed) {
+    placedElements.push({
+      id: 'house2Plan',
+      layer: house2PlanOverlay,
+      type: { id: 'house2', name: 'Secondary House (20.4×6.8m)', icon: '🏡', color: '#cc8844' },
+      measurement: house2PlanState.widthM.toFixed(1) + 'm × ' + house2PlanState.heightM.toFixed(1) + 'm'
+    });
+    updateElementsList();
+  }
+}
+
+// Restore secondary house plan on page load if previously placed
+if (house2PlanState.placed && house2PlanState.center) {
+  placeHouse2Plan();
+}
+
 function startDrawing(el) {
   // Handle house plan placement specially
   if (el.type === 'housePlan') {
@@ -2686,6 +2935,17 @@ function startDrawing(el) {
       return;
     }
     placeShedPlan();
+    return;
+  }
+
+  // Handle secondary house plan placement
+  if (el.type === 'house2Plan') {
+    if (house2PlanState.placed) {
+      const ctrl = document.getElementById('house2PlanControls');
+      ctrl.classList.toggle('visible');
+      return;
+    }
+    placeHouse2Plan();
     return;
   }
 
