@@ -167,7 +167,8 @@
     position: fixed; bottom: 20px; left: 20px; z-index: 1000;
     background: rgba(16,16,32,0.92); backdrop-filter: blur(12px);
     border: 1px solid rgba(255,255,255,0.15); border-radius: 10px;
-    padding: 10px 14px; max-width: 280px; font-size: 12px;
+    padding: 10px 14px; max-width: 320px; max-height: 60vh;
+    overflow-y: auto; font-size: 12px;
     color: #ccc; line-height: 1.6;
     pointer-events: auto;
     transition: opacity 0.2s;
@@ -180,6 +181,16 @@
     font-size: 14px; line-height: 1; padding: 2px 4px;
   }
   .feature-info-panel .close-btn:hover { color: #fff; }
+  .feature-info-section {
+    padding: 6px 0;
+  }
+  .feature-info-section + .feature-info-section {
+    border-top: 1px solid rgba(255,255,255,0.1);
+  }
+  .feature-info-section .layer-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 5px; vertical-align: middle;
+  }
 
   /* Snap indicator */
   .snap-indicator {
@@ -1139,9 +1150,9 @@ function createGovLayer(def) {
     pane: 'overlayPane',
     style: function(feature) { return getOverlayStyle(feature, def); },
     onEachFeature: function(feature, lyr) {
-      lyr.on('click', function(e) {
-        showFeatureInfo(getOverlayPopup(feature, def));
-      });
+      // Feature clicks are handled by the map-level multi-layer query handler
+      // (no per-feature click handler — this lets ALL layers be queried at once)
+
       // Contour index lines get permanent elevation labels
       if (def.id === 'contours_1m' && feature.properties.feature_type === 'Index Contour' && feature.properties.elevation_m) {
         lyr.bindTooltip(feature.properties.elevation_m + 'm', {
@@ -1926,7 +1937,7 @@ function createSpriteInstance(elDef, latlng) {
   });
 
   marker.on('click', function() {
-    showFeatureInfo(`<strong>${elDef.icon} ${elDef.name}</strong><br><span style="color:#888;">Drag to move. Right-click to remove.</span>`);
+    showFeatureInfo(`<strong>${elDef.icon} ${elDef.name}</strong><br><span style="color:#888;">Drag to move. Right-click to remove.</span>`, true);
   });
 
   return { marker, overlay };
@@ -2949,8 +2960,8 @@ L.marker(lotLabelPos, { icon: lotLabelIcon, interactive: false }).addTo(map);
 // FEATURE INFO PANEL (fixed bottom-left)
 // ============================
 let _featureJustClicked = false;
-function showFeatureInfo(html) {
-  _featureJustClicked = true;
+function showFeatureInfo(html, fromFeature) {
+  if (fromFeature) _featureJustClicked = true;
   const panel = document.getElementById('featureInfoPanel');
   const content = document.getElementById('featureInfoContent');
   content.innerHTML = html;
@@ -2962,10 +2973,113 @@ function hideFeatureInfo() {
 // Prevent clicks on the panel from propagating to the map
 const featurePanel = document.getElementById('featureInfoPanel');
 L.DomEvent.disableClickPropagation(featurePanel);
-// Close panel when clicking empty map area
-map.on('click', function() {
+
+// --- Multi-layer point query on map click ---
+// Ray-casting point-in-polygon test
+function _rayPIP(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const yi = ring[i].lat, xi = ring[i].lng;
+    const yj = ring[j].lat, xj = ring[j].lng;
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Check if a latlng is inside a Leaflet vector layer
+function _layerContainsPoint(latlng, layer) {
+  // Quick bounds check first
+  if (layer.getBounds && !layer.getBounds().contains(latlng)) return false;
+
+  if (layer instanceof L.Polygon) {
+    // getLatLngs() returns [[outer], [hole1], ...] for polygons
+    const rings = layer.getLatLngs();
+    // L.Polygon wraps: rings[0] is the outer ring (or rings itself for simple polygons)
+    const outer = Array.isArray(rings[0]) && Array.isArray(rings[0][0]) ? rings[0] : rings;
+    const outerRing = Array.isArray(outer[0]) ? outer[0] : outer;
+    return _rayPIP(latlng.lat, latlng.lng, outerRing);
+  }
+
+  // For polylines (e.g. contours), check proximity in screen pixels
+  if (layer instanceof L.Polyline) {
+    const clickPt = map.latLngToContainerPoint(latlng);
+    const latlngs = layer.getLatLngs();
+    // Flatten if needed (multi-polyline)
+    const pts = Array.isArray(latlngs[0]) && latlngs[0].lat === undefined ? latlngs.flat() : latlngs;
+    const threshold = 6; // pixels
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = map.latLngToContainerPoint(pts[i]);
+      const b = map.latLngToContainerPoint(pts[i + 1]);
+      if (_ptSegDist(clickPt, a, b) < threshold) return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
+// Point-to-segment distance (in pixels)
+function _ptSegDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  if (dx === 0 && dy === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy);
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// Query all active GeoJSON layers at a click point
+function queryAllLayersAtPoint(latlng) {
+  const results = []; // [{ def, features: [feature, ...] }, ...]
+
+  govLayerDefs.forEach(def => {
+    if (!govLayerInstances[def.id] || !map.hasLayer(govLayerInstances[def.id])) return;
+
+    const matches = [];
+    govLayerInstances[def.id].eachLayer(sublayer => {
+      if (_layerContainsPoint(latlng, sublayer) && sublayer.feature) {
+        matches.push(sublayer.feature);
+      }
+    });
+
+    if (matches.length > 0) {
+      results.push({ def: def, features: matches });
+    }
+  });
+
+  return results;
+}
+
+// Build combined HTML for multiple layer results
+function buildMultiLayerHTML(results) {
+  let html = '';
+  results.forEach(r => {
+    // Deduplicate features with same popup content
+    const seen = new Set();
+    r.features.forEach(feature => {
+      const popup = getOverlayPopup(feature, r.def);
+      if (seen.has(popup)) return;
+      seen.add(popup);
+      html += '<div class="feature-info-section">';
+      html += '<span class="layer-dot" style="background:' + r.def.color + '"></span>';
+      html += popup;
+      html += '</div>';
+    });
+  });
+  return html;
+}
+
+// Map click: query all layers or close panel
+map.on('click', function(e) {
   if (_featureJustClicked) { _featureJustClicked = false; return; }
-  hideFeatureInfo();
+
+  const results = queryAllLayersAtPoint(e.latlng);
+  if (results.length > 0) {
+    showFeatureInfo(buildMultiLayerHTML(results));
+  } else {
+    hideFeatureInfo();
+  }
 });
 
 // ============================
