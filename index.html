@@ -244,6 +244,23 @@
     transform: scale(1.4);
   }
 
+  /* Crosshair cursor for drawing modes */
+  .drawing-mode, .drawing-mode .leaflet-grab,
+  .drawing-mode .leaflet-interactive,
+  .drawing-mode .leaflet-marker-icon,
+  .drawing-mode .leaflet-tile-pane {
+    cursor: crosshair !important;
+  }
+
+  /* Sprite element markers */
+  .sprite-icon {
+    background: none !important; border: none !important;
+    width: 0 !important; height: 0 !important;
+    overflow: visible !important;
+  }
+  .sprite-icon svg { cursor: grab; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transition: filter 0.15s; }
+  .sprite-icon svg:hover { filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7)) brightness(1.1); }
+
   /* Contour elevation labels */
   .contour-label {
     background: none !important; border: none !important; box-shadow: none !important;
@@ -599,6 +616,17 @@ const UrlState = {
       }).filter(ll => !isNaN(ll.lat) && !isNaN(ll.lng));
     }
     if (p.has('dw_lock')) state.dwLocked = true;
+    // Sprite elements (septic, watertank, etc.)
+    state.sprites = {};
+    ['septic', 'watertank'].forEach(id => {
+      const key = 'sp_' + id;
+      if (p.has(key)) {
+        state.sprites[id] = p.get(key).split(';').map(pt => {
+          const [lat, lng] = pt.split(',').map(Number);
+          return L.latLng(lat, lng);
+        }).filter(ll => !isNaN(ll.lat) && !isNaN(ll.lng));
+      }
+    });
     if (p.has('grid')) {
       state.grid = true;
       state.gridOpacity = p.has('grid_op') ? parseInt(p.get('grid_op')) / 100 : undefined;
@@ -652,6 +680,12 @@ const UrlState = {
       p.set('dw', drivewayState.points.map(ll => ll.lat.toFixed(6) + ',' + ll.lng.toFixed(6)).join(';'));
       if (drivewayState.locked) p.set('dw_lock', '1');
     }
+    // Sprite elements
+    Object.keys(spriteState).forEach(id => {
+      if (spriteState[id].length > 0) {
+        p.set('sp_' + id, spriteState[id].map(s => s.latlng.lat.toFixed(6) + ',' + s.latlng.lng.toFixed(6)).join(';'));
+      }
+    });
     // Panel state
     const panel = document.getElementById('sidePanel');
     if (panel && panel.classList.contains('collapsed')) p.set('panel', 'closed');
@@ -1371,8 +1405,8 @@ const sitePlanElements = [
   { id: 'house', name: 'Place House Plan', icon: '🏠', color: '#4a9eff', fillColor: '#4a9eff', type: 'housePlan' },
   { id: 'garage', name: 'Place Shed Plan', icon: '🏗️', color: '#6677cc', fillColor: '#6677cc', type: 'shedPlan' },
   { id: 'driveway', name: 'Driveway / Access', icon: '🛤️', color: '#999999', fillColor: '#888888', type: 'driveway' },
-  { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'polygon' },
-  { id: 'watertank', name: 'Water Tank', icon: '💧', color: '#2299dd', fillColor: '#2299dd', type: 'circle' },
+  { id: 'septic', name: 'Septic System', icon: '🚰', color: '#aa5522', fillColor: '#aa5522', type: 'sprite', spriteW: 6, spriteH: 3 },
+  { id: 'watertank', name: 'Water Tank', icon: '💧', color: '#2299dd', fillColor: '#2299dd', type: 'sprite', spriteW: 3, spriteH: 3 },
   { id: 'fence', name: 'Fencing', icon: '🔲', color: '#ddaa33', fillColor: 'transparent', type: 'polyline' },
   { id: 'garden', name: 'Garden / Landscaping', icon: '🌿', color: '#44bb55', fillColor: '#44bb55', type: 'polygon' },
   { id: 'pool', name: 'Pool', icon: '🏊', color: '#33bbdd', fillColor: '#33bbdd', type: 'polygon' },
@@ -1650,7 +1684,7 @@ function startDrivewayDrawing() {
   document.getElementById('drawbtn-driveway').classList.add('active');
   showDrivewayControls();
   updateDrivewayAddBtn();
-  map.getContainer().style.cursor = 'crosshair';
+  map.getContainer().classList.add('drawing-mode');
   map.on('click', onDrivewayMapClick);
 }
 
@@ -1658,7 +1692,7 @@ function stopDrivewayDrawing() {
   drivewayState.drawing = false;
   document.getElementById('drawbtn-driveway').classList.remove('active');
   updateDrivewayAddBtn();
-  map.getContainer().style.cursor = '';
+  map.getContainer().classList.remove('drawing-mode');
   map.off('click', onDrivewayMapClick);
 }
 
@@ -1733,6 +1767,225 @@ if (urlState.driveway && urlState.driveway.length > 0) {
   showDrivewayControls();
   updateDrivewayLockUI();
 }
+
+// ============================
+// SPRITE ELEMENTS (Septic, Water Tank, etc.)
+// ============================
+const spriteState = {}; // { elementId: [{ latlng, marker }] }
+let spriteDrawing = null; // id of element currently being placed
+
+// Top-down SVG sprites (sized in pixels, will be placed as DivIcon)
+const spriteSVGs = {
+  septic: (w, h) => `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="septicGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" style="stop-color:#8B7355;stop-opacity:1"/>
+        <stop offset="50%" style="stop-color:#6B5340;stop-opacity:1"/>
+        <stop offset="100%" style="stop-color:#5A4530;stop-opacity:1"/>
+      </linearGradient>
+    </defs>
+    <!-- Main tank body -->
+    <rect x="2" y="2" width="${w-4}" height="${h-4}" rx="6" ry="6" fill="url(#septicGrad)" stroke="#3d2e1e" stroke-width="1.5"/>
+    <!-- Tank lid circles -->
+    <circle cx="${w*0.3}" cy="${h/2}" r="${Math.min(w,h)*0.16}" fill="#5a4a38" stroke="#3d2e1e" stroke-width="1"/>
+    <circle cx="${w*0.3}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="0.5"/>
+    <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.16}" fill="#5a4a38" stroke="#3d2e1e" stroke-width="1"/>
+    <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="0.5"/>
+    <!-- Inlet pipe -->
+    <rect x="${w-6}" y="${h*0.35}" width="6" height="${h*0.15}" rx="1" fill="#6a6a6a" stroke="#444" stroke-width="0.5"/>
+    <!-- Outlet pipe -->
+    <rect x="0" y="${h*0.5}" width="6" height="${h*0.15}" rx="1" fill="#6a6a6a" stroke="#444" stroke-width="0.5"/>
+  </svg>`,
+
+  watertank: (w, h) => `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="tankGrad" cx="45%" cy="40%">
+        <stop offset="0%" style="stop-color:#7BA8C9;stop-opacity:1"/>
+        <stop offset="60%" style="stop-color:#4A7A9B;stop-opacity:1"/>
+        <stop offset="100%" style="stop-color:#3A6080;stop-opacity:1"/>
+      </radialGradient>
+    </defs>
+    <!-- Tank body (circular from above) -->
+    <circle cx="${w/2}" cy="${h/2}" r="${w/2-2}" fill="url(#tankGrad)" stroke="#2d4f66" stroke-width="1.5"/>
+    <!-- Corrugation rings -->
+    <circle cx="${w/2}" cy="${h/2}" r="${w/2-5}" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="0.8"/>
+    <circle cx="${w/2}" cy="${h/2}" r="${w/2-9}" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="0.8"/>
+    <circle cx="${w/2}" cy="${h/2}" r="${w/2-13}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="0.8"/>
+    <!-- Centre cap -->
+    <circle cx="${w/2}" cy="${h/2}" r="${w*0.12}" fill="#3A6080" stroke="#2d4f66" stroke-width="1"/>
+    <!-- Inlet pipe -->
+    <rect x="${w-4}" y="${h*0.42}" width="5" height="${h*0.16}" rx="1" fill="#6a6a6a" stroke="#444" stroke-width="0.5"/>
+    <!-- Highlight -->
+    <ellipse cx="${w*0.38}" cy="${h*0.35}" rx="${w*0.15}" ry="${w*0.08}" fill="rgba(255,255,255,0.12)" transform="rotate(-20 ${w*0.38} ${h*0.35})"/>
+  </svg>`
+};
+
+function getSpritePixelSize(elDef) {
+  // Sprite size in pixels at current zoom — scale with map zoom
+  const baseZoom = 18;
+  const zoom = map.getZoom();
+  const scale = Math.pow(2, zoom - baseZoom);
+  // spriteW/H are in metres; convert to rough pixel size
+  const pixPerMeter = 8; // ~8px per metre at zoom 18
+  return {
+    w: Math.round(elDef.spriteW * pixPerMeter * scale),
+    h: Math.round(elDef.spriteH * pixPerMeter * scale)
+  };
+}
+
+function createSpriteMarker(elDef, latlng) {
+  const size = getSpritePixelSize(elDef);
+  const svgHtml = spriteSVGs[elDef.id](size.w, size.h);
+
+  const icon = L.divIcon({
+    className: 'sprite-icon',
+    html: svgHtml,
+    iconSize: [size.w, size.h],
+    iconAnchor: [size.w / 2, size.h / 2]
+  });
+
+  const marker = L.marker(latlng, {
+    icon: icon,
+    draggable: true,
+    zIndexOffset: 400
+  }).addTo(map);
+
+  // Right-click to remove
+  marker.on('contextmenu', function(e) {
+    L.DomEvent.stopPropagation(e);
+    L.DomEvent.preventDefault(e);
+    removeSpriteInstance(elDef.id, marker);
+  });
+
+  marker.on('dragend', function() {
+    // Update stored latlng
+    const instances = spriteState[elDef.id] || [];
+    const inst = instances.find(s => s.marker === marker);
+    if (inst) inst.latlng = marker.getLatLng();
+    UrlState.push();
+    updateSpriteInList(elDef.id);
+  });
+
+  // Show info on click
+  marker.on('click', function() {
+    showFeatureInfo(`<strong>${elDef.icon} ${elDef.name}</strong><br><span style="color:#888;">Drag to move. Right-click to remove.</span>`);
+  });
+
+  return marker;
+}
+
+function addSpriteInstance(elId, latlng) {
+  const elDef = sitePlanElements.find(e => e.id === elId);
+  if (!elDef) return;
+  if (!spriteState[elId]) spriteState[elId] = [];
+  const marker = createSpriteMarker(elDef, latlng);
+  spriteState[elId].push({ latlng: latlng, marker: marker });
+  UrlState.push();
+  updateSpriteInList(elId);
+}
+
+function removeSpriteInstance(elId, marker) {
+  if (!spriteState[elId]) return;
+  const idx = spriteState[elId].findIndex(s => s.marker === marker);
+  if (idx >= 0) {
+    map.removeLayer(spriteState[elId][idx].marker);
+    spriteState[elId].splice(idx, 1);
+    UrlState.push();
+    updateSpriteInList(elId);
+  }
+}
+
+function removeAllSprites(elId) {
+  if (!spriteState[elId]) return;
+  spriteState[elId].forEach(s => map.removeLayer(s.marker));
+  spriteState[elId] = [];
+  UrlState.push();
+  updateSpriteInList(elId);
+}
+
+function updateSpriteInList(elId) {
+  const elDef = sitePlanElements.find(e => e.id === elId);
+  // Remove existing entries for this sprite type
+  for (let i = placedElements.length - 1; i >= 0; i--) {
+    if (placedElements[i].id && placedElements[i].id.startsWith('sprite-' + elId)) {
+      placedElements.splice(i, 1);
+    }
+  }
+  // Add entries for each instance
+  if (spriteState[elId] && spriteState[elId].length > 0) {
+    const count = spriteState[elId].length;
+    placedElements.push({
+      id: 'sprite-' + elId,
+      layer: spriteState[elId][0].marker,
+      type: elDef,
+      measurement: count > 1 ? '×' + count : ''
+    });
+  }
+  updateElementsList();
+}
+
+function startSpriteDrawing(elId) {
+  if (spriteDrawing === elId) {
+    stopSpriteDrawing();
+    return;
+  }
+  // Stop any other active drawing
+  if (spriteDrawing) stopSpriteDrawing();
+  if (drivewayState.drawing) stopDrivewayDrawing();
+  if (drawHandler) { drawHandler.disable(); drawHandler = null; activeDrawTool = null; }
+
+  spriteDrawing = elId;
+  document.getElementById('drawbtn-' + elId).classList.add('active');
+  map.getContainer().classList.add('drawing-mode');
+  map.on('click', onSpriteMapClick);
+}
+
+function stopSpriteDrawing() {
+  if (!spriteDrawing) return;
+  document.getElementById('drawbtn-' + spriteDrawing).classList.remove('active');
+  spriteDrawing = null;
+  map.getContainer().classList.remove('drawing-mode');
+  map.off('click', onSpriteMapClick);
+}
+
+function onSpriteMapClick(e) {
+  if (!spriteDrawing) return;
+  _featureJustClicked = true;
+  addSpriteInstance(spriteDrawing, e.latlng);
+}
+
+// Resize sprites on zoom
+map.on('zoomend', function() {
+  Object.keys(spriteState).forEach(elId => {
+    const elDef = sitePlanElements.find(e => e.id === elId);
+    if (!elDef || !spriteState[elId]) return;
+    const size = getSpritePixelSize(elDef);
+    const svgHtml = spriteSVGs[elId](size.w, size.h);
+    spriteState[elId].forEach(inst => {
+      const newIcon = L.divIcon({
+        className: 'sprite-icon',
+        html: svgHtml,
+        iconSize: [size.w, size.h],
+        iconAnchor: [size.w / 2, size.h / 2]
+      });
+      inst.marker.setIcon(newIcon);
+    });
+  });
+});
+
+// Restore sprites from URL state
+Object.keys(urlState.sprites || {}).forEach(elId => {
+  const points = urlState.sprites[elId];
+  if (!points || points.length === 0) return;
+  const elDef = sitePlanElements.find(e => e.id === elId);
+  if (!elDef) return;
+  if (!spriteState[elId]) spriteState[elId] = [];
+  points.forEach(ll => {
+    const marker = createSpriteMarker(elDef, ll);
+    spriteState[elId].push({ latlng: ll, marker: marker });
+  });
+  updateSpriteInList(elId);
+});
 
 // ============================
 // HOUSE PLAN SVG OVERLAY
@@ -2382,6 +2635,12 @@ function startDrawing(el) {
     return;
   }
 
+  // Handle sprite elements (septic, water tank, etc.)
+  if (el.type === 'sprite') {
+    startSpriteDrawing(el.id);
+    return;
+  }
+
   if (!L.Draw) { alert('Drawing tools are still loading. Please try again in a moment.'); return; }
 
   // Cancel previous
@@ -2522,6 +2781,12 @@ function removeElement(id) {
   }
   if (id === 'driveway') {
     removeDriveway();
+    return;
+  }
+  // Handle sprite element removal
+  if (id.startsWith('sprite-')) {
+    const elId = id.replace('sprite-', '');
+    removeAllSprites(elId);
     return;
   }
   const idx = placedElements.findIndex(e => e.id === id);
