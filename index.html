@@ -191,6 +191,15 @@
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     margin-right: 5px; vertical-align: middle;
   }
+  .feature-info-section .sublayer-list {
+    margin: 2px 0 0 13px; padding: 0; list-style: none;
+  }
+  .feature-info-section .sublayer-list li {
+    padding: 1px 0; color: #ccc; font-size: 0.92em;
+  }
+  .feature-info-section .sublayer-list li::before {
+    content: '›'; margin-right: 5px; color: #888;
+  }
 
   /* Snap indicator */
   .snap-indicator {
@@ -2994,12 +3003,21 @@ function _layerContainsPoint(latlng, layer) {
   if (layer.getBounds && !layer.getBounds().contains(latlng)) return false;
 
   if (layer instanceof L.Polygon) {
-    // getLatLngs() returns [[outer], [hole1], ...] for polygons
+    // getLatLngs() returns [[outer], [hole1], ...] for polygons with holes
     const rings = layer.getLatLngs();
-    // L.Polygon wraps: rings[0] is the outer ring (or rings itself for simple polygons)
-    const outer = Array.isArray(rings[0]) && Array.isArray(rings[0][0]) ? rings[0] : rings;
-    const outerRing = Array.isArray(outer[0]) ? outer[0] : outer;
-    return _rayPIP(latlng.lat, latlng.lng, outerRing);
+    // Determine the outer ring — Leaflet wraps as [[LatLng,...], ...]
+    const outerRing = (Array.isArray(rings[0]) && rings[0][0] && typeof rings[0][0].lat === 'number')
+      ? rings[0] : rings;
+    // Must be inside outer ring
+    if (!_rayPIP(latlng.lat, latlng.lng, outerRing)) return false;
+    // Must NOT be inside any hole (rings[1], rings[2], ...)
+    for (let h = 1; h < rings.length; h++) {
+      const hole = rings[h];
+      if (Array.isArray(hole) && hole[0] && typeof hole[0].lat === 'number') {
+        if (_rayPIP(latlng.lat, latlng.lng, hole)) return false;
+      }
+    }
+    return true;
   }
 
   // For polylines (e.g. contours), check proximity in screen pixels
@@ -3051,21 +3069,39 @@ function queryAllLayersAtPoint(latlng) {
   return results;
 }
 
-// Build combined HTML for multiple layer results
+// Build combined HTML for multiple layer results, grouping sublayers
 function buildMultiLayerHTML(results) {
   let html = '';
   results.forEach(r => {
-    // Deduplicate features with same popup content
+    html += '<div class="feature-info-section">';
+    html += '<span class="layer-dot" style="background:' + r.def.color + '"></span>';
+
+    // Collect unique sublayer names from features
+    const sublayerNames = [];
     const seen = new Set();
-    r.features.forEach(feature => {
-      const popup = getOverlayPopup(feature, r.def);
-      if (seen.has(popup)) return;
-      seen.add(popup);
-      html += '<div class="feature-info-section">';
-      html += '<span class="layer-dot" style="background:' + r.def.color + '"></span>';
-      html += popup;
-      html += '</div>';
+    r.features.forEach(f => {
+      const sl = f.properties._sublayer || '';
+      if (sl && !seen.has(sl)) { seen.add(sl); sublayerNames.push(sl); }
     });
+
+    // If features have sublayers, show layer name as header + grouped sublayer list
+    if (sublayerNames.length > 0) {
+      html += '<strong>' + r.def.name + '</strong>';
+      html += '<ul class="sublayer-list">';
+      sublayerNames.forEach(sl => { html += '<li>' + sl + '</li>'; });
+      html += '</ul>';
+    } else {
+      // No sublayers — use the per-feature popup (cadastre, vegetation, etc.)
+      const popupSeen = new Set();
+      r.features.forEach(feature => {
+        const popup = getOverlayPopup(feature, r.def);
+        if (popupSeen.has(popup)) return;
+        popupSeen.add(popup);
+        html += popup;
+      });
+    }
+
+    html += '</div>';
   });
   return html;
 }
