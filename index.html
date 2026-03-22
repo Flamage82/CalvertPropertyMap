@@ -260,6 +260,13 @@
   }
   .sprite-icon svg { cursor: grab; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transition: filter 0.15s; }
   .sprite-icon svg:hover { filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7)) brightness(1.1); }
+  /* Invisible drag handle for SVG overlay sprites */
+  .sprite-handle {
+    background: none !important; border: none !important;
+    cursor: grab !important;
+    opacity: 0;
+  }
+  .sprite-handle:hover { opacity: 0.15; background: rgba(255,255,255,0.3) !important; border-radius: 50%; }
 
   /* Contour elevation labels */
   .contour-label {
@@ -1813,84 +1820,84 @@ if (urlState.driveway && urlState.driveway.length > 0) {
 // ============================
 // SPRITE ELEMENTS (Septic, Water Tank, etc.)
 // ============================
-const spriteState = {}; // { elementId: [{ latlng, marker }] }
+const spriteState = {}; // { elementId: [{ latlng, marker, overlay }] }
 let spriteDrawing = null; // id of element currently being placed
+let spriteIdCounter = 0; // unique ID for SVG gradient defs
 
-// Top-down SVG sprites (sized in pixels, will be placed as DivIcon)
-const spriteSVGs = {
-  septic: (w, h) => `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="septicGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-        <stop offset="0%" style="stop-color:#8B7355;stop-opacity:1"/>
-        <stop offset="50%" style="stop-color:#6B5340;stop-opacity:1"/>
-        <stop offset="100%" style="stop-color:#5A4530;stop-opacity:1"/>
-      </linearGradient>
-    </defs>
-    <!-- Main tank body -->
-    <rect x="2" y="2" width="${w-4}" height="${h-4}" rx="6" ry="6" fill="url(#septicGrad)" stroke="#3d2e1e" stroke-width="1.5"/>
-    <!-- Tank lid circles -->
-    <circle cx="${w*0.3}" cy="${h/2}" r="${Math.min(w,h)*0.16}" fill="#5a4a38" stroke="#3d2e1e" stroke-width="1"/>
-    <circle cx="${w*0.3}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="0.5"/>
-    <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.16}" fill="#5a4a38" stroke="#3d2e1e" stroke-width="1"/>
-    <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="0.5"/>
-    <!-- Inlet pipe -->
-    <rect x="${w-6}" y="${h*0.35}" width="6" height="${h*0.15}" rx="1" fill="#6a6a6a" stroke="#444" stroke-width="0.5"/>
-    <!-- Outlet pipe -->
-    <rect x="0" y="${h*0.5}" width="6" height="${h*0.15}" rx="1" fill="#6a6a6a" stroke="#444" stroke-width="0.5"/>
-  </svg>`,
+// Build an SVG element in metre-space for a given sprite type.
+// w/h are the real-world metre dimensions. uid is a unique suffix for gradient IDs.
+function buildSpriteSVG(elId, w, h, uid) {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('xmlns', svgNS);
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
 
-  watertank: (w, h) => `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <radialGradient id="tankGrad" cx="45%" cy="40%">
-        <stop offset="0%" style="stop-color:#7BA8C9;stop-opacity:1"/>
-        <stop offset="60%" style="stop-color:#4A7A9B;stop-opacity:1"/>
-        <stop offset="100%" style="stop-color:#3A6080;stop-opacity:1"/>
-      </radialGradient>
-    </defs>
-    <!-- Tank body (circular from above) -->
-    <circle cx="${w/2}" cy="${h/2}" r="${w/2-2}" fill="url(#tankGrad)" stroke="#2d4f66" stroke-width="1.5"/>
-    <!-- Corrugation rings -->
-    <circle cx="${w/2}" cy="${h/2}" r="${w/2-5}" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="0.8"/>
-    <circle cx="${w/2}" cy="${h/2}" r="${w/2-9}" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="0.8"/>
-    <circle cx="${w/2}" cy="${h/2}" r="${w/2-13}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="0.8"/>
-    <!-- Centre cap -->
-    <circle cx="${w/2}" cy="${h/2}" r="${w*0.12}" fill="#3A6080" stroke="#2d4f66" stroke-width="1"/>
-    <!-- Inlet pipe -->
-    <rect x="${w-4}" y="${h*0.42}" width="5" height="${h*0.16}" rx="1" fill="#6a6a6a" stroke="#444" stroke-width="0.5"/>
-    <!-- Highlight -->
-    <ellipse cx="${w*0.38}" cy="${h*0.35}" rx="${w*0.15}" ry="${w*0.08}" fill="rgba(255,255,255,0.12)" transform="rotate(-20 ${w*0.38} ${h*0.35})"/>
-  </svg>`
-};
+  // Stroke widths proportional to real-world size
+  const sw = Math.min(w, h) * 0.04; // general stroke
+  const swThin = sw * 0.5;
 
-function getSpritePixelSize(elDef) {
-  // Sprite size in pixels at current zoom — scale with map zoom
-  const baseZoom = 18;
-  const zoom = map.getZoom();
-  const scale = Math.pow(2, zoom - baseZoom);
-  // spriteW/H are in metres; convert to rough pixel size
-  const pixPerMeter = 8; // ~8px per metre at zoom 18
-  return {
-    w: Math.round(elDef.spriteW * pixPerMeter * scale),
-    h: Math.round(elDef.spriteH * pixPerMeter * scale)
-  };
+  if (elId === 'septic') {
+    const rx = Math.min(w, h) * 0.12;
+    svg.innerHTML = `
+      <defs>
+        <linearGradient id="sepGr${uid}" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#8B7355"/><stop offset="50%" stop-color="#6B5340"/><stop offset="100%" stop-color="#5A4530"/>
+        </linearGradient>
+      </defs>
+      <rect x="${sw}" y="${sw}" width="${w-sw*2}" height="${h-sw*2}" rx="${rx}" ry="${rx}" fill="url(#sepGr${uid})" stroke="#3d2e1e" stroke-width="${sw}"/>
+      <circle cx="${w*0.3}" cy="${h/2}" r="${Math.min(w,h)*0.16}" fill="#5a4a38" stroke="#3d2e1e" stroke-width="${swThin}"/>
+      <circle cx="${w*0.3}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="${swThin*0.6}"/>
+      <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.16}" fill="#5a4a38" stroke="#3d2e1e" stroke-width="${swThin}"/>
+      <circle cx="${w*0.7}" cy="${h/2}" r="${Math.min(w,h)*0.08}" fill="#4a3a28" stroke="#3d2e1e" stroke-width="${swThin*0.6}"/>
+      <rect x="${w-w*0.08}" y="${h*0.35}" width="${w*0.08}" height="${h*0.15}" rx="${w*0.01}" fill="#6a6a6a" stroke="#444" stroke-width="${swThin*0.5}"/>
+      <rect x="0" y="${h*0.5}" width="${w*0.08}" height="${h*0.15}" rx="${w*0.01}" fill="#6a6a6a" stroke="#444" stroke-width="${swThin*0.5}"/>
+    `;
+  } else if (elId === 'watertank') {
+    const r = w / 2 - sw;
+    svg.innerHTML = `
+      <defs>
+        <radialGradient id="tkGr${uid}" cx="45%" cy="40%">
+          <stop offset="0%" stop-color="#7BA8C9"/><stop offset="60%" stop-color="#4A7A9B"/><stop offset="100%" stop-color="#3A6080"/>
+        </radialGradient>
+      </defs>
+      <circle cx="${w/2}" cy="${h/2}" r="${r}" fill="url(#tkGr${uid})" stroke="#2d4f66" stroke-width="${sw}"/>
+      <circle cx="${w/2}" cy="${h/2}" r="${r*0.88}" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="${swThin*0.6}"/>
+      <circle cx="${w/2}" cy="${h/2}" r="${r*0.74}" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="${swThin*0.6}"/>
+      <circle cx="${w/2}" cy="${h/2}" r="${r*0.60}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="${swThin*0.6}"/>
+      <circle cx="${w/2}" cy="${h/2}" r="${w*0.12}" fill="#3A6080" stroke="#2d4f66" stroke-width="${swThin}"/>
+      <rect x="${w-sw*2}" y="${h*0.42}" width="${sw*3}" height="${h*0.16}" rx="${sw*0.3}" fill="#6a6a6a" stroke="#444" stroke-width="${swThin*0.5}"/>
+      <ellipse cx="${w*0.38}" cy="${h*0.35}" rx="${w*0.15}" ry="${w*0.08}" fill="rgba(255,255,255,0.12)" transform="rotate(-20 ${w*0.38} ${h*0.35})"/>
+    `;
+  }
+  return svg;
 }
 
-function createSpriteMarker(elDef, latlng) {
-  const size = getSpritePixelSize(elDef);
-  const svgHtml = spriteSVGs[elDef.id](size.w, size.h);
+// Compute the L.latLngBounds for a sprite given its centre and metre dimensions
+function getSpriteBounds(latlng, elDef) {
+  const conv = metersToLatLng(1, latlng.lat);
+  const halfW = (elDef.spriteW / 2) * conv.lng;
+  const halfH = (elDef.spriteH / 2) * conv.lat;
+  return L.latLngBounds(
+    [latlng.lat - halfH, latlng.lng - halfW],
+    [latlng.lat + halfH, latlng.lng + halfW]
+  );
+}
 
-  const icon = L.divIcon({
-    className: 'sprite-icon',
-    html: svgHtml,
-    iconSize: [size.w, size.h],
-    iconAnchor: [size.w / 2, size.h / 2]
+function createSpriteInstance(elDef, latlng) {
+  const uid = spriteIdCounter++;
+  const svg = buildSpriteSVG(elDef.id, elDef.spriteW, elDef.spriteH, uid);
+  const bounds = getSpriteBounds(latlng, elDef);
+  const overlay = L.svgOverlay(svg, bounds, { interactive: false, pane: 'overlayPane' }).addTo(map);
+
+  // Invisible marker for drag / click / right-click interaction
+  const invisIcon = L.divIcon({
+    className: 'sprite-handle',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    html: '<div style="width:100%;height:100%;cursor:grab;"></div>'
   });
-
-  const marker = L.marker(latlng, {
-    icon: icon,
-    draggable: true,
-    zIndexOffset: 400
-  }).addTo(map);
+  const marker = L.marker(latlng, { icon: invisIcon, draggable: true, zIndexOffset: 500 }).addTo(map);
 
   // Right-click to remove
   marker.on('contextmenu', function(e) {
@@ -1899,29 +1906,38 @@ function createSpriteMarker(elDef, latlng) {
     removeSpriteInstance(elDef.id, marker);
   });
 
+  // Continuous drag — move the overlay to follow the marker in real time
+  marker.on('drag', function() {
+    const pos = marker.getLatLng();
+    const newBounds = getSpriteBounds(pos, elDef);
+    overlay.setBounds(newBounds);
+  });
+
   marker.on('dragend', function() {
-    // Update stored latlng
+    const pos = marker.getLatLng();
     const instances = spriteState[elDef.id] || [];
     const inst = instances.find(s => s.marker === marker);
-    if (inst) inst.latlng = marker.getLatLng();
+    if (inst) {
+      inst.latlng = pos;
+      overlay.setBounds(getSpriteBounds(pos, elDef));
+    }
     UrlState.push();
     updateSpriteInList(elDef.id);
   });
 
-  // Show info on click
   marker.on('click', function() {
     showFeatureInfo(`<strong>${elDef.icon} ${elDef.name}</strong><br><span style="color:#888;">Drag to move. Right-click to remove.</span>`);
   });
 
-  return marker;
+  return { marker, overlay };
 }
 
 function addSpriteInstance(elId, latlng) {
   const elDef = sitePlanElements.find(e => e.id === elId);
   if (!elDef) return;
   if (!spriteState[elId]) spriteState[elId] = [];
-  const marker = createSpriteMarker(elDef, latlng);
-  spriteState[elId].push({ latlng: latlng, marker: marker });
+  const { marker, overlay } = createSpriteInstance(elDef, latlng);
+  spriteState[elId].push({ latlng: latlng, marker: marker, overlay: overlay });
   UrlState.push();
   updateSpriteInList(elId);
 }
@@ -1931,6 +1947,7 @@ function removeSpriteInstance(elId, marker) {
   const idx = spriteState[elId].findIndex(s => s.marker === marker);
   if (idx >= 0) {
     map.removeLayer(spriteState[elId][idx].marker);
+    map.removeLayer(spriteState[elId][idx].overlay);
     spriteState[elId].splice(idx, 1);
     UrlState.push();
     updateSpriteInList(elId);
@@ -1939,7 +1956,10 @@ function removeSpriteInstance(elId, marker) {
 
 function removeAllSprites(elId) {
   if (!spriteState[elId]) return;
-  spriteState[elId].forEach(s => map.removeLayer(s.marker));
+  spriteState[elId].forEach(s => {
+    map.removeLayer(s.marker);
+    map.removeLayer(s.overlay);
+  });
   spriteState[elId] = [];
   UrlState.push();
   updateSpriteInList(elId);
@@ -1947,13 +1967,11 @@ function removeAllSprites(elId) {
 
 function updateSpriteInList(elId) {
   const elDef = sitePlanElements.find(e => e.id === elId);
-  // Remove existing entries for this sprite type
   for (let i = placedElements.length - 1; i >= 0; i--) {
     if (placedElements[i].id && placedElements[i].id.startsWith('sprite-' + elId)) {
       placedElements.splice(i, 1);
     }
   }
-  // Add entries for each instance
   if (spriteState[elId] && spriteState[elId].length > 0) {
     const count = spriteState[elId].length;
     placedElements.push({
@@ -1971,7 +1989,6 @@ function startSpriteDrawing(elId) {
     stopSpriteDrawing();
     return;
   }
-  // Stop any other active drawing
   if (spriteDrawing) stopSpriteDrawing();
   if (drivewayState.drawing) stopDrivewayDrawing();
   if (drawHandler) { drawHandler.disable(); drawHandler = null; activeDrawTool = null; }
@@ -1996,25 +2013,6 @@ function onSpriteMapClick(e) {
   addSpriteInstance(spriteDrawing, e.latlng);
 }
 
-// Resize sprites on zoom
-map.on('zoomend', function() {
-  Object.keys(spriteState).forEach(elId => {
-    const elDef = sitePlanElements.find(e => e.id === elId);
-    if (!elDef || !spriteState[elId]) return;
-    const size = getSpritePixelSize(elDef);
-    const svgHtml = spriteSVGs[elId](size.w, size.h);
-    spriteState[elId].forEach(inst => {
-      const newIcon = L.divIcon({
-        className: 'sprite-icon',
-        html: svgHtml,
-        iconSize: [size.w, size.h],
-        iconAnchor: [size.w / 2, size.h / 2]
-      });
-      inst.marker.setIcon(newIcon);
-    });
-  });
-});
-
 // Restore sprites from URL state
 Object.keys(urlState.sprites || {}).forEach(elId => {
   const points = urlState.sprites[elId];
@@ -2023,8 +2021,8 @@ Object.keys(urlState.sprites || {}).forEach(elId => {
   if (!elDef) return;
   if (!spriteState[elId]) spriteState[elId] = [];
   points.forEach(ll => {
-    const marker = createSpriteMarker(elDef, ll);
-    spriteState[elId].push({ latlng: ll, marker: marker });
+    const { marker, overlay } = createSpriteInstance(elDef, ll);
+    spriteState[elId].push({ latlng: ll, marker: marker, overlay: overlay });
   });
   updateSpriteInList(elId);
 });
