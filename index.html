@@ -1574,52 +1574,94 @@ function renderUnlockedDriveway() {
 }
 
 function renderLockedDriveway() {
-  // Smooth spline through the control points
-  const smooth = catmullRomSpline(drivewayState.points, 12);
+  // High-resolution spline through the control points (40 segments per interval
+  // ensures the curve is smooth even at maximum zoom)
+  const smooth = catmullRomSpline(drivewayState.points, 40);
+  if (smooth.length < 2) return;
 
-  // Layer 1: Dark outer edge (shadow/gutter)
-  const edgeOuter = L.polyline(smooth, {
-    color: '#2a2a2a',
-    weight: 18,
-    opacity: 0.7,
-    lineCap: 'round',
-    lineJoin: 'round',
-    interactive: false
-  }).addTo(map);
-  drivewayState.lockedLayers.push(edgeOuter);
+  // Work in a local metre-based coordinate system centred on the first point.
+  // This gives us uniform x/y units so SVG strokes render without distortion.
+  const origin = smooth[0];
+  const conv = metersToLatLng(1, origin.lat);
+  // conv.lat = degrees per metre (latitude), conv.lng = degrees per metre (longitude)
 
-  // Layer 2: Gravel base
-  const base = L.polyline(smooth, {
-    color: '#8a7d6b',
-    weight: 14,
-    opacity: 0.85,
-    lineCap: 'round',
-    lineJoin: 'round',
-    interactive: false
-  }).addTo(map);
-  drivewayState.lockedLayers.push(base);
+  // Convert spline points from lat/lng to metres from origin
+  const meterPts = smooth.map(pt => ({
+    x: (pt.lng - origin.lng) / conv.lng,
+    y: (pt.lat - origin.lat) / conv.lat
+  }));
 
-  // Layer 3: Lighter centre strip (worn tyre tracks area)
-  const centre = L.polyline(smooth, {
-    color: '#a09585',
-    weight: 8,
-    opacity: 0.6,
-    lineCap: 'round',
-    lineJoin: 'round',
-    interactive: false
-  }).addTo(map);
-  drivewayState.lockedLayers.push(centre);
+  // Driveway width in metres
+  const driveW = 4;
 
-  // Layer 4: Subtle centre highlight
-  const highlight = L.polyline(smooth, {
-    color: '#b8ad9e',
-    weight: 3,
-    opacity: 0.35,
-    lineCap: 'round',
-    lineJoin: 'round',
-    interactive: false
-  }).addTo(map);
-  drivewayState.lockedLayers.push(highlight);
+  // Calculate bounds in metre-space with padding for stroke overshoot
+  const pad = driveW * 2;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  meterPts.forEach(pt => {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  });
+  minX -= pad; maxX += pad;
+  minY -= pad; maxY += pad;
+
+  // Build SVG path in metre-space (negate y because SVG y-axis points down)
+  const pathD = meterPts.map((pt, i) => {
+    const cmd = i === 0 ? 'M' : 'L';
+    return `${cmd}${pt.x.toFixed(3)},${(-pt.y).toFixed(3)}`;
+  }).join(' ');
+
+  // viewBox in metre-space: x, y (negated), width, height
+  const vbX = minX;
+  const vbY = -maxY;
+  const vbW = maxX - minX;
+  const vbH = maxY - minY;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('xmlns', svgNS);
+  // We must use "none" because the Leaflet overlay container's pixel aspect ratio
+  // is determined by the Mercator projection and won't match our metre-space ratio.
+  // At this latitude the distortion is only ~13%, which is acceptable and far better
+  // than the jagged edges from working in raw lat/lng degree space.
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`);
+
+  // Stroke width is now directly in metres (uniform in both axes)
+  const strokeW = driveW;
+
+  // Helper to add a path layer
+  function addLayer(color, width, opacity) {
+    const p = document.createElementNS(svgNS, 'path');
+    p.setAttribute('d', pathD);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', color);
+    p.setAttribute('stroke-width', width);
+    p.setAttribute('stroke-opacity', opacity);
+    p.setAttribute('stroke-linecap', 'butt');
+    p.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(p);
+  }
+
+  // Layer 1: Dark outer edge (kerb/border)
+  addLayer('#3d3428', strokeW * 1.35, '0.95');
+  // Layer 2: Gravel base (main driveway surface)
+  addLayer('#b8a88c', strokeW, '0.95');
+  // Layer 3: Lighter centre wear strip
+  addLayer('#d4c8b0', strokeW * 0.5, '0.7');
+  // Layer 4: Centre highlight
+  addLayer('#e8dfd0', strokeW * 0.15, '0.5');
+
+  // Convert metre-space bounds back to lat/lng for the Leaflet overlay
+  const swLat = origin.lat + minY * conv.lat;
+  const swLng = origin.lng + minX * conv.lng;
+  const neLat = origin.lat + maxY * conv.lat;
+  const neLng = origin.lng + maxX * conv.lng;
+
+  const bounds = L.latLngBounds([swLat, swLng], [neLat, neLng]);
+  const overlay = L.svgOverlay(svg, bounds, { interactive: false, pane: 'overlayPane' }).addTo(map);
+  drivewayState.lockedLayers.push(overlay);
 }
 
 function createDrivewayVertex(index) {
@@ -2756,15 +2798,15 @@ function updateElementsList() {
       <button class="delete-btn" onclick="removeElement('${elem.id}')" title="Remove">×</button>
     `;
     item.onmouseenter = () => {
-      elem.layer.setStyle && elem.layer.setStyle({ weight: 4, fillOpacity: 0.5 });
+      if (elem.layer && elem.layer.setStyle) elem.layer.setStyle({ weight: 4, fillOpacity: 0.5 });
     };
     item.onmouseleave = () => {
-      elem.layer.setStyle && elem.layer.setStyle({ weight: 2, fillOpacity: 0.3 });
+      if (elem.layer && elem.layer.setStyle) elem.layer.setStyle({ weight: 2, fillOpacity: 0.3 });
     };
     item.onclick = (e) => {
       if (e.target.classList.contains('delete-btn')) return;
-      if (elem.layer.getBounds) map.fitBounds(elem.layer.getBounds(), { padding: [60, 60] });
-      else if (elem.layer.getLatLng) map.setView(elem.layer.getLatLng(), 18);
+      if (elem.layer && elem.layer.getBounds) map.fitBounds(elem.layer.getBounds(), { padding: [60, 60] });
+      else if (elem.layer && elem.layer.getLatLng) map.setView(elem.layer.getLatLng(), 18);
     };
     container.appendChild(item);
   });
