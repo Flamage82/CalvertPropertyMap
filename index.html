@@ -323,6 +323,16 @@
     .panel { width: 280px; }
     .panel-toggle { right: 280px; }
   }
+
+  /* Bushfire clearing plan */
+  .bfp-tree-dot {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #c0392b; border: 2px solid #fff; color: #fff;
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.55);
+  }
+  #bfpTreeList { margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -367,6 +377,31 @@
       <label>Opacity</label>
       <input type="range" min="0" max="100" value="40" id="gridOpacitySlider" oninput="setGridOpacity(this.value / 100)" />
     </div>
+  </div>
+
+  <!-- Bushfire Clearing Plan -->
+  <div class="section">
+    <div class="section-title">Bushfire Clearing Plan</div>
+    <button class="draw-btn" id="bfpEnvelopeBtn" onclick="bfpStartEnvelope()">
+      <span class="draw-icon">&#9634;</span> Draw house envelope
+    </button>
+    <div class="house-plan-controls" id="bfpEnvelopeControls">
+      <label>Envelope rotation</label>
+      <div class="control-row">
+        <input type="range" min="0" max="359" value="0" id="bfpRotSlider" oninput="bfpSetRotation(this.value)" />
+        <span class="value-display" id="bfpRotVal">0&deg;</span>
+      </div>
+      <div class="house-plan-btn-row">
+        <button onclick="bfpStartEnvelope()">Redraw</button>
+        <button class="danger" onclick="bfpRemoveEnvelope()">Remove</button>
+      </div>
+      <div class="hint">Drag the box on the map to move it.</div>
+    </div>
+    <button class="draw-btn" id="bfpTreeBtn" onclick="bfpToggleTreeMode()" style="margin-top:6px;">
+      <span class="draw-icon">&#9651;</span> Place trees to clear
+    </button>
+    <div id="bfpStats" style="padding:8px 2px;font-size:12px;color:#aaa;font-family:monospace;line-height:1.7;"></div>
+    <div id="bfpTreeList"></div>
   </div>
 
   <!-- Drawing Tools -->
@@ -430,6 +465,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Esri Leaflet removed — all layers now local GeoJSON -->
 <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<!-- Embedded overlay data (cadastre + koala layers) so the app works when
+     opened directly as a file:// page, without a local web server. -->
+<script src="overlays/offline_overlays.js"></script>
 <script>
 // ============================
 // TILE CACHE (IndexedDB)
@@ -807,6 +845,11 @@ const map = L.map('map', {
 // Offset map center to account for side panel (only if no URL state set the view)
 if (!urlState.lat) map.panBy([160, 0], { animate: false });
 
+// Custom pane for koala data layers — above the base tiles but below the
+// house/shed plan overlays, so placed buildings stay clearly visible on top.
+map.createPane('koalaPane');
+map.getPane('koalaPane').style.zIndex = 350;
+
 // Update cursor coordinates
 map.on('mousemove', function(e) {
   document.getElementById('cursorCoords').textContent =
@@ -875,6 +918,30 @@ const govLayerDefs = [
     layers: [],
     opacity: 0.7,
     active: true
+  },
+  {
+    id: 'koala_kha',
+    name: 'Koala Habitat Area (core)',
+    desc: 'Regulated koala habitat area (Planning Reg 2017)',
+    color: '#1fae28',
+    url: 'overlays/koala_habitat_area_overlay.geojson',
+    type: 'geojson',
+    pane: 'koalaPane',
+    layers: [],
+    opacity: 0.6,
+    active: false
+  },
+  {
+    id: 'koala_kpa',
+    name: 'Koala Priority Area',
+    desc: 'State koala priority area',
+    color: '#9b59b6',
+    url: 'overlays/koala_priority_area_overlay.geojson',
+    type: 'geojson',
+    pane: 'koalaPane',
+    layers: [],
+    opacity: 0.35,
+    active: false
   },
   {
     id: 'vegetation',
@@ -1076,6 +1143,16 @@ function getOverlayStyle(feature, def, opacityOverride) {
     color = '#4a9eff'; weight = 1.5; fillOpacity = baseOpacity * 0.08;
   }
 
+  // Koala Habitat Area (core) — regulated under Planning Regulation 2017
+  if (def.id === 'koala_kha') {
+    return { color: '#0c6b14', fillColor: '#1fae28', fillOpacity: baseOpacity * 0.55, weight: 2.5, opacity: 1 };
+  }
+
+  // Koala Priority Area — dashed outline, very light fill
+  if (def.id === 'koala_kpa') {
+    return { color: '#7d3c98', fillColor: '#9b59b6', fillOpacity: baseOpacity * 0.18, weight: 2, opacity: 0.9, dashArray: '6 4' };
+  }
+
   // Vegetation Management: color by RVM category
   if (def.id === 'vegetation') {
     const rvm = (feature.properties.rvm_cat || '').toUpperCase();
@@ -1153,6 +1230,19 @@ function getOverlayPopup(feature, def) {
     return html;
   }
 
+  // Koala Habitat Area (core)
+  if (def.id === 'koala_kha') {
+    return '<strong>Koala Habitat Area (core)</strong>'
+      + '<br>Regulated koala habitat area'
+      + '<br>Planning Regulation 2017, Sch 10 Pt 10 Div 2'
+      + '<br>Source: QLD DETSI koala mapping';
+  }
+
+  // Koala Priority Area
+  if (def.id === 'koala_kpa') {
+    return '<strong>Koala Priority Area</strong><br>Source: QLD DETSI koala mapping';
+  }
+
   // Vegetation Management
   if (def.id === 'vegetation') {
     let html = '<strong>Vegetation Management</strong>';
@@ -1209,7 +1299,7 @@ function getOverlayPopup(feature, def) {
 function createGovLayer(def) {
   // All layers are local GeoJSON
   const layer = L.geoJSON(null, {
-    pane: 'overlayPane',
+    pane: def.pane || 'overlayPane',
     style: function(feature) { return getOverlayStyle(feature, def); },
     onEachFeature: function(feature, lyr) {
       // Feature clicks are handled by the map-level multi-layer query handler
@@ -1223,10 +1313,15 @@ function createGovLayer(def) {
       }
     }
   });
-  // Async load the GeoJSON file
-  fetch(def.url).then(r => r.json()).then(data => {
-    layer.addData(data);
-  }).catch(e => console.warn('Failed to load overlay:', def.url, e));
+  // Use embedded data when available (so the app works when opened directly
+  // as a file:// page, without a local web server). Otherwise fetch the file.
+  if (window.OFFLINE_OVERLAYS && window.OFFLINE_OVERLAYS[def.id]) {
+    layer.addData(window.OFFLINE_OVERLAYS[def.id]);
+  } else {
+    fetch(def.url).then(r => r.json()).then(data => {
+      layer.addData(data);
+    }).catch(e => console.warn('Failed to load overlay:', def.url, e));
+  }
   return layer;
 }
 
@@ -4073,6 +4168,265 @@ if (urlState.panel === 'closed') {
 
 // Push initial URL state (captures defaults + any URL overrides)
 setTimeout(() => UrlState.push(), 500);
+
+// ============================
+// BUSHFIRE CLEARING PLAN
+// House envelope + true 20 m buffer + numbered trees to clear
+// ============================
+map.createPane('bfpPane');
+map.getPane('bfpPane').style.zIndex = 360; // above koala (350), below house plan (400)
+
+const BFP_BUFFER_M = 20;
+let bfpState = { envelope: null, trees: [] };
+let bfpEnvelopeLayer = null, bfpBufferLayer = null, bfpTreeMarkers = [];
+let bfpMode = null, bfpDrawClicks = [], bfpDragging = false, bfpDragLast = null;
+
+function bfpMpdLat() { return 111320; }
+function bfpMpdLng(lat) { return 111320 * Math.cos(lat * Math.PI / 180); }
+function bfpToLatLng(cLat, cLng, xE, yN) {
+  return L.latLng(cLat + yN / bfpMpdLat(), cLng + xE / bfpMpdLng(cLat));
+}
+function bfpNorm(v) { const m = Math.hypot(v.x, v.y) || 1; return { x: v.x / m, y: v.y / m }; }
+
+function bfpEnvelopeCornersM(env) {
+  const hw = env.widthM / 2, hh = env.heightM / 2;
+  const base = [{ x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: hh }, { x: -hw, y: hh }];
+  const a = (env.rotation || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+  return base.map(p => ({ x: p.x * ca - p.y * sa, y: p.x * sa + p.y * ca }));
+}
+
+// True buffer of a convex polygon — straight offsets with rounded corner arcs
+function bfpBufferRing(cornersM, r) {
+  const n = cornersM.length, steps = 8, out = [];
+  for (let i = 0; i < n; i++) {
+    const prev = cornersM[(i - 1 + n) % n], cur = cornersM[i], next = cornersM[(i + 1) % n];
+    const inD = bfpNorm({ x: cur.x - prev.x, y: cur.y - prev.y });
+    const outD = bfpNorm({ x: next.x - cur.x, y: next.y - cur.y });
+    const inN = { x: inD.y, y: -inD.x }, outN = { x: outD.y, y: -outD.x };
+    let a0 = Math.atan2(inN.y, inN.x), a1 = Math.atan2(outN.y, outN.x), da = a1 - a0;
+    while (da <= -Math.PI) da += 2 * Math.PI;
+    while (da > Math.PI) da -= 2 * Math.PI;
+    for (let s = 0; s <= steps; s++) {
+      const ang = a0 + da * (s / steps);
+      out.push({ x: cur.x + r * Math.cos(ang), y: cur.y + r * Math.sin(ang) });
+    }
+  }
+  return out;
+}
+
+function bfpUpdateGeometry() {
+  const env = bfpState.envelope;
+  if (!env || !bfpEnvelopeLayer) return;
+  const cm = bfpEnvelopeCornersM(env);
+  bfpEnvelopeLayer.setLatLngs(cm.map(p => bfpToLatLng(env.centerLat, env.centerLng, p.x, p.y)));
+  bfpBufferLayer.setLatLngs(bfpBufferRing(cm, BFP_BUFFER_M).map(p => bfpToLatLng(env.centerLat, env.centerLng, p.x, p.y)));
+  bfpUpdateStats();
+}
+
+function bfpRender() {
+  const env = bfpState.envelope;
+  if (!env) {
+    if (bfpEnvelopeLayer) { map.removeLayer(bfpEnvelopeLayer); bfpEnvelopeLayer = null; }
+    if (bfpBufferLayer) { map.removeLayer(bfpBufferLayer); bfpBufferLayer = null; }
+    bfpUpdateStats();
+    return;
+  }
+  if (!bfpBufferLayer) {
+    bfpBufferLayer = L.polygon([], { pane: 'bfpPane', color: '#e8740c', weight: 2, dashArray: '6 4', fillColor: '#f59331', fillOpacity: 0.18 }).addTo(map);
+    bfpBufferLayer.bindTooltip('20 m bushfire clearing zone');
+  }
+  if (!bfpEnvelopeLayer) {
+    bfpEnvelopeLayer = L.polygon([], { pane: 'bfpPane', color: '#c0392b', weight: 2.5, fillColor: '#c0392b', fillOpacity: 0.10 }).addTo(map);
+    bfpEnvelopeLayer.bindTooltip('House envelope');
+    bfpEnvelopeLayer.on('mousedown', bfpEnvelopeMouseDown);
+  }
+  bfpUpdateGeometry();
+}
+
+function bfpEnvelopeMouseDown(e) {
+  if (bfpMode) return;
+  bfpDragging = true; bfpDragLast = e.latlng;
+  map.dragging.disable();
+  if (e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+}
+
+function bfpUpdateStats() {
+  const el = document.getElementById('bfpStats');
+  if (!el) return;
+  const env = bfpState.envelope;
+  let h = '';
+  if (env) {
+    const r = BFP_BUFFER_M;
+    const envArea = env.widthM * env.heightM;
+    const zoneArea = envArea + 2 * r * (env.widthM + env.heightM) + Math.PI * r * r;
+    h += 'House envelope: ' + env.widthM.toFixed(1) + ' &times; ' + env.heightM.toFixed(1) + ' m'
+       + ' (' + Math.round(envArea).toLocaleString() + ' m&sup2;)<br>';
+    h += '20 m clearing zone: <b style="color:#e0e0e0">' + Math.round(zoneArea).toLocaleString() + ' m&sup2;</b><br>';
+  } else {
+    h += 'No house envelope drawn yet.<br>';
+  }
+  h += 'Trees to be cleared: <b style="color:#e0e0e0">' + bfpState.trees.length + '</b>';
+  el.innerHTML = h;
+}
+
+function bfpRebuildTrees() {
+  bfpTreeMarkers.forEach(m => map.removeLayer(m));
+  bfpTreeMarkers = [];
+  bfpState.trees.forEach((t, i) => {
+    const icon = L.divIcon({ className: 'bfp-tree', html: '<div class="bfp-tree-dot">' + (i + 1) + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] });
+    const m = L.marker([t.lat, t.lng], { icon: icon, draggable: true }).addTo(map);
+    m.bindTooltip('Tree ' + (i + 1) + ' — to be cleared');
+    m.on('dragend', () => { const ll = m.getLatLng(); t.lat = ll.lat; t.lng = ll.lng; bfpSave(); });
+    bfpTreeMarkers.push(m);
+  });
+}
+
+function bfpRenderTreeList() {
+  const el = document.getElementById('bfpTreeList');
+  if (!el) return;
+  el.innerHTML = '';
+  bfpState.trees.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'element-item';
+    row.innerHTML = '<div class="color-dot" style="background:#c0392b"></div>'
+      + '<div class="name">Tree ' + (i + 1) + '</div>'
+      + '<span class="area">to clear</span>'
+      + '<button class="delete-btn" title="Remove">&#10005;</button>';
+    row.querySelector('.delete-btn').onclick = function () { bfpDeleteTree(i); };
+    el.appendChild(row);
+  });
+  if (bfpState.trees.length > 1) {
+    const clr = document.createElement('button');
+    clr.className = 'draw-btn';
+    clr.style.cssText = 'margin:6px 0 0;padding:5px;font-size:11px;';
+    clr.textContent = 'Clear all trees';
+    clr.onclick = function () { bfpState.trees = []; bfpRebuildTrees(); bfpUpdateStats(); bfpRenderTreeList(); bfpSave(); };
+    el.appendChild(clr);
+  }
+}
+
+function bfpAddTree(lat, lng) {
+  bfpState.trees.push({ lat: lat, lng: lng });
+  bfpRebuildTrees(); bfpUpdateStats(); bfpRenderTreeList(); bfpSave();
+}
+function bfpDeleteTree(i) {
+  bfpState.trees.splice(i, 1);
+  bfpRebuildTrees(); bfpUpdateStats(); bfpRenderTreeList(); bfpSave();
+}
+
+function bfpSetActive(id, on) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('active', !!on);
+}
+function bfpHint(msg) {
+  const si = document.getElementById('snapIndicator');
+  if (!si) return;
+  si.textContent = msg;
+  si.style.display = msg ? 'block' : 'none';
+}
+
+function bfpStartEnvelope() {
+  bfpMode = 'envelope'; bfpDrawClicks = [];
+  bfpSetActive('bfpTreeBtn', false);
+  bfpSetActive('bfpEnvelopeBtn', true);
+  map.getContainer().style.cursor = 'crosshair';
+  bfpHint('Click two opposite corners of the house envelope.');
+}
+function bfpFinishEnvelope(a, b) {
+  const cLat = (a.lat + b.lat) / 2, cLng = (a.lng + b.lng) / 2;
+  const w = Math.abs(b.lng - a.lng) * bfpMpdLng(cLat);
+  const hM = Math.abs(b.lat - a.lat) * bfpMpdLat();
+  bfpState.envelope = { centerLat: cLat, centerLng: cLng, widthM: Math.max(w, 1), heightM: Math.max(hM, 1), rotation: 0 };
+  bfpMode = null;
+  bfpSetActive('bfpEnvelopeBtn', false);
+  map.getContainer().style.cursor = '';
+  bfpHint('');
+  const ctrls = document.getElementById('bfpEnvelopeControls');
+  if (ctrls) ctrls.classList.add('visible');
+  const rs = document.getElementById('bfpRotSlider'); if (rs) rs.value = 0;
+  const rv = document.getElementById('bfpRotVal'); if (rv) rv.innerHTML = '0&deg;';
+  bfpRender(); bfpSave();
+}
+function bfpRemoveEnvelope() {
+  bfpState.envelope = null;
+  const ctrls = document.getElementById('bfpEnvelopeControls');
+  if (ctrls) ctrls.classList.remove('visible');
+  bfpRender(); bfpSave();
+}
+function bfpSetRotation(v) {
+  if (!bfpState.envelope) return;
+  bfpState.envelope.rotation = parseInt(v, 10) || 0;
+  const rv = document.getElementById('bfpRotVal'); if (rv) rv.innerHTML = (parseInt(v, 10) || 0) + '&deg;';
+  bfpUpdateGeometry(); bfpSave();
+}
+function bfpToggleTreeMode() {
+  if (bfpMode === 'tree') {
+    bfpMode = null; bfpSetActive('bfpTreeBtn', false);
+    map.getContainer().style.cursor = ''; bfpHint('');
+  } else {
+    bfpMode = 'tree'; bfpDrawClicks = [];
+    bfpSetActive('bfpTreeBtn', true); bfpSetActive('bfpEnvelopeBtn', false);
+    map.getContainer().style.cursor = 'crosshair';
+    bfpHint('Click each tree to be cleared. Click the button again when finished.');
+  }
+}
+
+function bfpSave() {
+  try { localStorage.setItem('bfpState', JSON.stringify(bfpState)); } catch (e) {}
+}
+function bfpLoad() {
+  try {
+    const s = localStorage.getItem('bfpState');
+    if (!s) return;
+    const d = JSON.parse(s);
+    if (d && typeof d === 'object') {
+      bfpState.envelope = d.envelope || null;
+      bfpState.trees = Array.isArray(d.trees) ? d.trees : [];
+    }
+  } catch (e) {}
+}
+
+map.on('click', function (e) {
+  if (bfpMode === 'envelope') {
+    bfpDrawClicks.push(e.latlng);
+    if (bfpDrawClicks.length >= 2) bfpFinishEnvelope(bfpDrawClicks[0], bfpDrawClicks[1]);
+    if (typeof hideFeatureInfo === 'function') hideFeatureInfo();
+  } else if (bfpMode === 'tree') {
+    bfpAddTree(e.latlng.lat, e.latlng.lng);
+    if (typeof hideFeatureInfo === 'function') hideFeatureInfo();
+  }
+});
+map.on('mousemove', function (e) {
+  if (!bfpDragging || !bfpState.envelope) return;
+  bfpState.envelope.centerLat += e.latlng.lat - bfpDragLast.lat;
+  bfpState.envelope.centerLng += e.latlng.lng - bfpDragLast.lng;
+  bfpDragLast = e.latlng;
+  bfpUpdateGeometry();
+});
+map.on('mouseup', function () {
+  if (bfpDragging) { bfpDragging = false; map.dragging.enable(); bfpSave(); }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && bfpMode) {
+    bfpMode = null;
+    bfpSetActive('bfpEnvelopeBtn', false); bfpSetActive('bfpTreeBtn', false);
+    map.getContainer().style.cursor = ''; bfpHint('');
+  }
+});
+
+// init bushfire clearing plan
+bfpLoad();
+if (bfpState.envelope) {
+  const ctrls = document.getElementById('bfpEnvelopeControls');
+  if (ctrls) ctrls.classList.add('visible');
+  const rs = document.getElementById('bfpRotSlider');
+  if (rs) rs.value = bfpState.envelope.rotation || 0;
+  const rv = document.getElementById('bfpRotVal');
+  if (rv) rv.innerHTML = (bfpState.envelope.rotation || 0) + '&deg;';
+}
+bfpRender();
+bfpRebuildTrees();
+bfpRenderTreeList();
 
 </script>
 </body>
