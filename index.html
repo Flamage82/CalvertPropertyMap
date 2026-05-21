@@ -333,6 +333,14 @@
     box-shadow: 0 1px 4px rgba(0,0,0,0.55);
   }
   #bfpTreeList { margin-top: 6px; }
+  .leaflet-tooltip.bfp-label {
+    background: rgba(16,16,32,0.88); color: #fff;
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 5px;
+    padding: 3px 8px; font-size: 11px; font-weight: 500;
+    line-height: 1.4; text-align: center; white-space: nowrap;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.55);
+  }
+  .leaflet-tooltip.bfp-label::before { display: none; }
 </style>
 </head>
 <body>
@@ -3748,6 +3756,11 @@ function removeElement(id) {
     removeDriveway();
     return;
   }
+  // Generic path elements (powerline, underground power, water/sewage pipes)
+  if (id.indexOf('path-') === 0) {
+    removePath(id.replace('path-', ''));
+    return;
+  }
   // Handle sprite element removal
   if (id.startsWith('sprite-')) {
     const elId = id.replace('sprite-', '');
@@ -3756,7 +3769,7 @@ function removeElement(id) {
   }
   const idx = placedElements.findIndex(e => e.id === id);
   if (idx >= 0) {
-    drawnItems.removeLayer(placedElements[idx].layer);
+    if (placedElements[idx].layer) drawnItems.removeLayer(placedElements[idx].layer);
     placedElements.splice(idx, 1);
     updateElementsList();
   }
@@ -4179,6 +4192,7 @@ map.getPane('bfpPane').style.zIndex = 360; // above koala (350), below house pla
 const BFP_BUFFER_M = 20;
 let bfpState = { envelope: null, trees: [] };
 let bfpEnvelopeLayer = null, bfpBufferLayer = null, bfpTreeMarkers = [];
+let bfpEnvLabel = null, bfpZoneLabel = null;
 let bfpMode = null, bfpDrawClicks = [], bfpDragging = false, bfpDragLast = null;
 
 function bfpMpdLat() { return 111320; }
@@ -4250,7 +4264,28 @@ function bfpEnvelopeMouseDown(e) {
   if (e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
 }
 
+function bfpMakeLabel(latlng, html) {
+  return L.tooltip({ permanent: true, direction: 'center', className: 'bfp-label', interactive: false, opacity: 1 })
+    .setLatLng(latlng).setContent(html);
+}
+function bfpUpdateLabels() {
+  if (bfpEnvLabel) { map.removeLayer(bfpEnvLabel); bfpEnvLabel = null; }
+  if (bfpZoneLabel) { map.removeLayer(bfpZoneLabel); bfpZoneLabel = null; }
+  const env = bfpState.envelope;
+  if (!env) return;
+  const r = BFP_BUFFER_M;
+  const envArea = env.widthM * env.heightM;
+  const zoneArea = envArea + 2 * r * (env.widthM + env.heightM) + Math.PI * r * r;
+  const halfDiag = Math.hypot(env.widthM / 2, env.heightM / 2);
+  const envHtml = '<b>House envelope</b><br>' + env.widthM.toFixed(1) + ' &times; ' + env.heightM.toFixed(1)
+    + ' m &middot; ' + Math.round(envArea).toLocaleString() + ' m&sup2;';
+  const zoneHtml = '<b>20 m bushfire clearing zone</b><br>' + Math.round(zoneArea).toLocaleString()
+    + ' m&sup2; &middot; ' + bfpState.trees.length + ' trees to be cleared';
+  bfpEnvLabel = bfpMakeLabel(L.latLng(env.centerLat, env.centerLng), envHtml).addTo(map);
+  bfpZoneLabel = bfpMakeLabel(bfpToLatLng(env.centerLat, env.centerLng, 0, halfDiag + r + 14), zoneHtml).addTo(map);
+}
 function bfpUpdateStats() {
+  bfpUpdateLabels();
   const el = document.getElementById('bfpStats');
   if (!el) return;
   const env = bfpState.envelope;
